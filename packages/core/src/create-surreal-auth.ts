@@ -20,31 +20,12 @@ export type SurrealAuthConfig = {
   options?: Omit<ConnectOptions, "namespace" | "database">
 }
 
-export type SurrealAuth = ReturnType<typeof create>
+export type SurrealAuth = ReturnType<typeof createSurrealAuth>
 
-declare global {
-  var __surrealAuthStore: Map<string, SurrealAuth> | undefined
-}
-
-// Kept on globalThis so hot reload reuses the live client instead of opening a second connection.
-const store = (globalThis.__surrealAuthStore ??= new Map())
-
-export function createSurrealAuth(config: SurrealAuthConfig): SurrealAuth {
-  const cookie = { ...DEFAULT_AUTH_COOKIE, ...config.cookie }
-  const key = [config.endpoint, config.namespace, config.database, config.access, cookie.name].join(
-    "|"
-  )
-
-  const existing = store.get(key)
-  if (existing) return existing
-
-  const instance = create(config, cookie, () => store.delete(key))
-  store.set(key, instance)
-  return instance
-}
-
-function create(config: SurrealAuthConfig, cookie: AuthCookie, forget: () => void) {
+// Opens its own connection. Create one per app, and close() it when done (e.g. on hot reload).
+export function createSurrealAuth(config: SurrealAuthConfig) {
   const { endpoint, namespace, database, access, options } = config
+  const cookie: AuthCookie = { ...DEFAULT_AUTH_COOKIE, ...config.cookie }
   const db = new Surreal()
 
   const stopCookieAuth = setupCookieAuth(db, { namespace, database, access, cookie })
@@ -56,7 +37,6 @@ function create(config: SurrealAuthConfig, cookie: AuthCookie, forget: () => voi
 
   function close() {
     stopCookieAuth()
-    forget()
     return db.close()
   }
 

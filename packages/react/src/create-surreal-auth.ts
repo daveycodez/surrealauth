@@ -1,6 +1,5 @@
 import {
   createSurrealAuth as createCoreSurrealAuth,
-  type SurrealAuth as CoreSurrealAuth,
   type SurrealAuthConfig,
   type TokenClaims
 } from "@surrealauth/core"
@@ -9,20 +8,11 @@ import type { ConnectionStatus, RecordId } from "surrealdb"
 
 export type SurrealAuth = ReturnType<typeof withHooks>
 
-const instances = new WeakMap<CoreSurrealAuth, SurrealAuth>()
-
 export function createSurrealAuth(config: SurrealAuthConfig): SurrealAuth {
-  const core = createCoreSurrealAuth(config)
-
-  let instance = instances.get(core)
-  if (!instance) {
-    instance = withHooks(core)
-    instances.set(core, instance)
-  }
-  return instance
+  return withHooks(createCoreSurrealAuth(config))
 }
 
-function withHooks(core: CoreSurrealAuth) {
+function withHooks(core: ReturnType<typeof createCoreSurrealAuth>) {
   function useToken(): string | null {
     return useSyncExternalStore(core.subscribeToken, core.getToken, () => null)
   }
