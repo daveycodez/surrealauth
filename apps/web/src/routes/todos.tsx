@@ -1,5 +1,5 @@
 import { Card, Skeleton } from "@heroui/react"
-import { createFileRoute, Link } from "@tanstack/react-router"
+import { createFileRoute, Link, useHydrated } from "@tanstack/react-router"
 
 import { useUser } from "../hooks/use-user"
 
@@ -8,6 +8,7 @@ export const Route = createFileRoute("/todos")({
 })
 
 function Todos() {
+  const hydrated = useHydrated()
   const { data: user, isLoading } = useUser()
 
   return (
@@ -18,7 +19,7 @@ function Todos() {
           <Card.Description>Placeholder page.</Card.Description>
         </Card.Header>
         <Card.Content className="text-sm">
-          {isLoading ? (
+          {(!hydrated || isLoading) && !user ? (
             <Skeleton className="h-5 w-48 rounded-md" />
           ) : user ? (
             <p>

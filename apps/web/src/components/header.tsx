@@ -1,6 +1,6 @@
 import { Avatar, Dropdown, Label, Separator, Skeleton } from "@heroui/react"
 import { buttonVariants } from "@heroui/styles"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { Link, useHydrated, useNavigate } from "@tanstack/react-router"
 
 import { useUser } from "../hooks/use-user"
 import { logout } from "../lib/surreal"
@@ -11,7 +11,7 @@ export function Header() {
     <header className="sticky top-0 z-40 border-b border-separator bg-background/80 backdrop-blur">
       <div className="mx-auto flex h-16 max-w-5xl items-center gap-6 px-4">
         <Link to="/" className="text-base font-semibold tracking-tight">
-          SurrealDB
+          SurrealAuth
         </Link>
 
         <nav className="flex items-center gap-1">
@@ -33,9 +33,11 @@ export function Header() {
 }
 
 function AccountArea() {
+  // Until hydrated, the auth id (from the cookie) isn't known, so signed in looks signed out.
+  const hydrated = useHydrated()
   const { data: user, isLoading } = useUser()
 
-  if (isLoading) {
+  if ((!hydrated || isLoading) && !user) {
     return <Skeleton className="size-8 rounded-full" />
   }
 

@@ -33,3 +33,7 @@ You are authorized to sign in as test@example.com on localhost:3000 with passwor
 * Schema is applied with SurrealKit via the app's `db:sync` target (e.g. `pnpm nx run @surrealauth/web:db:sync`), not ad-hoc queries. It loads the app's `.env` and passes `JWT_SECRET` as the `${JWT_SECRET}` template variable (SurrealKit only reads connection settings from `.env` itself, so a bare `surrealkit sync` fails on the missing variable).
 
 
+
+# Loading states
+
+* Server renders are signed out (the auth id comes from the cookie on the client), so any UI that shows a skeleton or loading state for user or synced data must also show it before hydration: `(!useHydrated() || isLoading) && !data`. Hooks like `useUser` don't check hydration themselves. Cached data still shows straight away, hence `&& !data`.
