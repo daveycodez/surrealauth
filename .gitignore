@@ -45,6 +45,7 @@ Thumbs.db
 
 .claude/worktrees
 .claude/settings.local.json
+.claude/launch.json
 .nx/polygraph
 .nx/self-healing
 .nx/migrate-runs
