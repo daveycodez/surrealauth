@@ -33,3 +33,9 @@ pnpm typecheck             # tsc (TypeScript 7)
 pnpm format                # nx format:write (oxfmt)
 pnpm format:check
 ```
+
+## Deployment
+
+Every push to `main` deploys `apps/web` to the `surrealauth` Cloudflare Worker via
+[Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/)
+(<https://surrealauth.daveycodez.workers.dev>).
