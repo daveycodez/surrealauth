@@ -4,7 +4,7 @@ import { ThemeProvider } from "next-themes"
 import type { ReactNode } from "react"
 
 import { Header } from "../components/header"
-import { AuthProvider } from "../lib/auth"
+import { useAuthSubscription } from "../hooks/use-auth-subscription"
 import { queryClient } from "../lib/collections"
 import { db, SurrealProvider } from "../lib/surreal-provider"
 
@@ -23,6 +23,8 @@ export const Route = createRootRoute({
 })
 
 function RootDocument({ children }: { children: ReactNode }) {
+  useAuthSubscription()
+
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -41,12 +43,10 @@ function RootDocument({ children }: { children: ReactNode }) {
               endpoint={import.meta.env.VITE_SURREAL_URL}
               params={{ namespace: "main", database: "main" }}
             >
-              <AuthProvider>
-                <div className="flex min-h-screen flex-col">
-                  <Header />
-                  {children}
-                </div>
-              </AuthProvider>
+              <div className="flex min-h-screen flex-col">
+                <Header />
+                {children}
+              </div>
             </SurrealProvider>
           </QueryClientProvider>
         </ThemeProvider>

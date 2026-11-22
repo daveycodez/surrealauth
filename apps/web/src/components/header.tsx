@@ -2,8 +2,9 @@ import { Avatar, Dropdown, Label, Separator, Skeleton } from "@heroui/react"
 import { buttonVariants } from "@heroui/styles"
 import { Link, useNavigate } from "@tanstack/react-router"
 
-import { useAuth, useUser } from "../lib/auth"
-import type { User } from "../lib/collections"
+import { useAuth } from "../hooks/use-auth"
+import { useUser } from "../hooks/use-user"
+import type { User } from "../types/schema.generated"
 
 export function Header() {
   return (
@@ -32,10 +33,9 @@ export function Header() {
 }
 
 function AccountArea() {
-  const { status } = useAuth()
   const { data: user, isLoading } = useUser()
 
-  if (status === "loading" || isLoading) {
+  if (isLoading) {
     return <Skeleton className="size-8 rounded-full" />
   }
 
@@ -64,14 +64,14 @@ function initials(user: User) {
 }
 
 function AccountMenu({ user }: { user: User }) {
-  const { signOut } = useAuth()
+  const { logout } = useAuth()
   const navigate = useNavigate()
 
   async function onAction(key: React.Key) {
     if (key === "todos") {
       await navigate({ to: "/todos" })
     } else if (key === "sign-out") {
-      await signOut()
+      await logout()
       await navigate({ to: "/" })
     }
   }

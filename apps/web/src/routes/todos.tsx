@@ -1,14 +1,13 @@
 import { Card, Skeleton } from "@heroui/react"
 import { createFileRoute, Link } from "@tanstack/react-router"
 
-import { useAuth, useUser } from "../lib/auth"
+import { useUser } from "../hooks/use-user"
 
 export const Route = createFileRoute("/todos")({
   component: Todos
 })
 
 function Todos() {
-  const { status } = useAuth()
   const { data: user, isLoading } = useUser()
 
   return (
@@ -19,7 +18,7 @@ function Todos() {
           <Card.Description>Placeholder page.</Card.Description>
         </Card.Header>
         <Card.Content className="text-sm">
-          {status === "loading" || isLoading ? (
+          {isLoading ? (
             <Skeleton className="h-5 w-48 rounded-md" />
           ) : user ? (
             <p>

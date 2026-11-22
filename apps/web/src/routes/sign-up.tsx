@@ -3,14 +3,14 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 import { type FormEvent, useState } from "react"
 
 import { AuthError, errorMessage } from "../components/auth-result"
-import { useAuth } from "../lib/auth"
+import { useAuth } from "../hooks/use-auth"
 
 export const Route = createFileRoute("/sign-up")({
   component: SignUp
 })
 
 function SignUp() {
-  const { signUp } = useAuth()
+  const { register } = useAuth()
   const navigate = useNavigate()
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState(false)
@@ -22,10 +22,7 @@ function SignUp() {
     setError(undefined)
 
     try {
-      await signUp({
-        email: String(form.get("email")),
-        pass: String(form.get("password"))
-      })
+      await register(String(form.get("email")), String(form.get("password")))
       await navigate({ to: "/" })
     } catch (error) {
       setError(errorMessage(error))

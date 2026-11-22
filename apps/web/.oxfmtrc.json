@@ -10,6 +10,7 @@
   "ignorePatterns": [
     "src/routeTree.gen.ts",
     "worker-configuration.d.ts",
-    "src/lib/surreal-provider.tsx"
+    "src/lib/surreal-provider.tsx",
+    "src/hooks/use-auth.ts"
   ]
 }
