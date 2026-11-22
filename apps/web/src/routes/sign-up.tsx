@@ -1,16 +1,15 @@
 import { Button, Card, Form, Input, Label, TextField } from "@heroui/react"
-import { useAuth } from "@surrealauth/react"
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 import { type FormEvent, useState } from "react"
 
 import { AuthError, errorMessage } from "../components/auth-result"
+import { register } from "../lib/surreal"
 
 export const Route = createFileRoute("/sign-up")({
   component: SignUp
 })
 
 function SignUp() {
-  const { register } = useAuth()
   const navigate = useNavigate()
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState(false)

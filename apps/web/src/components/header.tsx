@@ -1,9 +1,9 @@
 import { Avatar, Dropdown, Label, Separator, Skeleton } from "@heroui/react"
 import { buttonVariants } from "@heroui/styles"
-import { useAuth } from "@surrealauth/react"
 import { Link, useNavigate } from "@tanstack/react-router"
 
 import { useUser } from "../hooks/use-user"
+import { logout } from "../lib/surreal"
 import type { User } from "../types/schema.generated"
 
 export function Header() {
@@ -64,7 +64,6 @@ function initials(user: User) {
 }
 
 function AccountMenu({ user }: { user: User }) {
-  const { logout } = useAuth()
   const navigate = useNavigate()
 
   async function onAction(key: React.Key) {

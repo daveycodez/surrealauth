@@ -3,8 +3,8 @@ import { createCollection } from "@tanstack/react-db"
 import { QueryClient } from "@tanstack/react-query"
 
 import type { User } from "../types/schema.generated"
-import { db } from "./db"
 import { persistence } from "./persistence"
+import { db } from "./surreal"
 
 export type { User }
 
