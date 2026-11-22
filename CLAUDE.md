@@ -21,3 +21,8 @@
 - The `nx-generate` skill handles generator discovery internally - don't call nx_docs just to look up generator syntax
 
 <!-- nx configuration end-->
+
+# SurrealDB conventions
+
+- Use camelCase for table, field, index, param and access names in `database/schema/*.surql` (e.g. `updatedAt`, `todoItem`), so SurrealKit-generated TypeScript types match our code with no case conversion. Never add a snake_case/camelCase mapping layer.
+- Schema lives in `database/schema/` and is applied with SurrealKit (`surrealkit sync`), not ad-hoc queries.
