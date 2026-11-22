@@ -1,4 +1,5 @@
-import { persistedSurrealCollectionOptions, surrealCollectionOptions } from "@surrealdb/tanstack-db"
+import { persistedCollectionOptions } from "@tanstack/browser-db-sqlite-persistence"
+import { surrealCollectionOptions } from "@surrealdb/tanstack-db"
 import { createCollection } from "@tanstack/react-db"
 import { QueryClient } from "@tanstack/react-query"
 
@@ -19,11 +20,19 @@ const userOptions = {
   syncMode: "on-demand"
 } as const
 
-// schemaVersion 2: password stopped being selectable, so rows cached with it are dropped.
 // Realtime (LIVE) TanStack DB collection over the `user` table, persisted to SQLite (OPFS)
 // in the browser. Table permissions only let a record user see their own row.
+// schemaVersion 4: drops rows cached before record ids were stored as strings (2: with password).
+// initialRender: a query the cache already covers waits at most networkTimeoutMs for the server,
+// then shows the cached rows, so it doesn't load forever while offline. (We call
+// persistedCollectionOptions ourselves: persistedSurrealCollectionOptions drops initialRender.)
 export const users = createCollection(
   persistence
-    ? persistedSurrealCollectionOptions<User>({ persistence, schemaVersion: 2, ...userOptions })
+    ? persistedCollectionOptions({
+        ...surrealCollectionOptions<User>(userOptions),
+        persistence,
+        schemaVersion: 4,
+        initialRender: { strategy: "network-first", networkTimeoutMs: 3000 }
+      })
     : surrealCollectionOptions<User>(userOptions)
 )
