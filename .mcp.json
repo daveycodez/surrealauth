@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "surrealkit": {
+      "type": "stdio",
+      "command": "surrealkit",
+      "args": ["mcp"],
+      "env": {}
+    }
+  }
+}
