@@ -18,15 +18,17 @@ and where npm packages actually help.
 
 ```sh
 pnpm install
-pnpm dev            # http://localhost:3000
+cp apps/web/.env.example apps/web/.env   # then fill in SURREALDB_PASSWORD and JWT_SECRET
+pnpm nx run @surrealauth/web:dev         # http://localhost:3000
 ```
 
 ## Tasks
 
 ```sh
-pnpm nx run web:build      # vite build + static prerender
-pnpm nx run web:preview    # preview the build in workerd
-pnpm nx run web:deploy     # build + wrangler deploy (worker: surrealauth)
+pnpm nx run @surrealauth/web:build     # vite build + static prerender
+pnpm nx run @surrealauth/web:preview   # preview the build in workerd
+pnpm nx run @surrealauth/web:deploy    # build + wrangler deploy (worker: surrealauth)
+pnpm nx run @surrealauth/web:db:sync   # apply apps/web/database/schema with SurrealKit
 
 pnpm lint                  # oxlint (@nx/oxlint, batched)
 pnpm typecheck             # tsc (TypeScript 7)

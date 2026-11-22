@@ -1,11 +1,11 @@
 {
   "mcpServers": {
-    "surrealkit": {
+    "surrealkit-web": {
       "type": "stdio",
       "command": "sh",
       "args": [
         "-c",
-        "set -a && . ./.env && set +a && SURREALKIT_VAR_JWT_SECRET=\"$JWT_SECRET\" exec surrealkit mcp"
+        "cd apps/web && set -a && . ./.env && set +a && SURREALKIT_VAR_JWT_SECRET=\"$JWT_SECRET\" exec surrealkit mcp"
       ],
       "env": {}
     }

@@ -1,0 +1,11 @@
+# Environment (SurrealKit connection + JWT_SECRET for this app's database)
+.env*
+!.env.example
+
+# Cloudflare / Wrangler
+.wrangler
+.dev.vars*
+!.dev.vars.example
+
+# TanStack Start
+.tanstack

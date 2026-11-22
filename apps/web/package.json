@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "vite build && wrangler deploy",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "db:sync": "set -a && . ./.env && set +a && surrealkit sync --var JWT_SECRET=\"$JWT_SECRET\""
   },
   "dependencies": {
     "@heroui/react": "^3.2.7",

@@ -48,12 +48,3 @@ Thumbs.db
 .nx/polygraph
 .nx/self-healing
 .nx/migrate-runs
-# Cloudflare / Wrangler
-.wrangler
-.dev.vars*
-!.dev.vars.example
-.env*
-!.env.example
-
-# TanStack Start
-.tanstack

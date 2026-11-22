@@ -1,9 +1,9 @@
 # Project-scoped Codex config (loaded only when this project is trusted).
-# SurrealKit's MCP server, per https://surrealdb.com/docs/operate/schema-migration#mcp-server.
+# SurrealKit's MCP server for apps/web's database, per https://surrealdb.com/docs/operate/schema-migration#mcp-server.
 # .env is loaded so JWT_SECRET reaches SurrealKit as the ${JWT_SECRET} template variable.
-[mcp_servers.surrealkit]
+[mcp_servers.surrealkit-web]
 command = "sh"
 args = [
   "-c",
-  "set -a && . ./.env && set +a && SURREALKIT_VAR_JWT_SECRET=\"$JWT_SECRET\" exec surrealkit mcp"
+  "cd apps/web && set -a && . ./.env && set +a && SURREALKIT_VAR_JWT_SECRET=\"$JWT_SECRET\" exec surrealkit mcp"
 ]

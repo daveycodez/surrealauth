@@ -4,13 +4,11 @@
   "private": true,
   "license": "MIT",
   "scripts": {
-    "dev": "nx run @surrealauth/web:dev",
     "build": "nx run-many -t build",
     "lint": "nx run-many -t lint",
     "typecheck": "nx run-many -t typecheck",
     "format": "nx format:write",
-    "format:check": "nx format:check",
-    "db:sync": "set -a && . ./.env && set +a && surrealkit sync --var JWT_SECRET=\"$JWT_SECRET\""
+    "format:check": "nx format:check"
   },
   "devDependencies": {
     "@nx/js": "24.0.6",
