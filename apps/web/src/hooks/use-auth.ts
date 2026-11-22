@@ -22,6 +22,9 @@ export function useAuth() {
     }
 
     async function logout() {
+        // Revoke the refresh token first: invalidate() alone leaves it usable on the server.
+        // A session without a refresh token has nothing to revoke, so sign out regardless.
+        await client.revoke().catch(() => {});
         return client.invalidate();
     }
 

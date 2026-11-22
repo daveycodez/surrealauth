@@ -3,7 +3,7 @@ import type { ReactNode } from "react"
 
 import { db, SurrealProvider } from "../lib/surreal-provider"
 
-// App-wide providers. The QueryClientProvider comes from setupRouterSsrQueryIntegration (router.tsx).
+// App-wide providers. The QueryClient (and its IndexedDB persistence) comes from router.tsx.
 export function Providers({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
