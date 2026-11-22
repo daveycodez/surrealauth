@@ -9,9 +9,11 @@ allowBuilds:
   sharp: true
   workerd: true
 
-# @surrealdb/tanstack-db patched with two upstream PRs; remove once both are released:
-# - https://github.com/surrealdb/tanstack-db/pull/13 lazy-loads loro-crdt (CRDT-only, unused here)
-# - https://github.com/surrealdb/tanstack-db/pull/14 adds `recordIds: 'string'` so record ids are plain
-#   strings in TanStack DB (eq() and useLiveQuery identity work by value)
+# Upstream fixes applied as patches; remove each once it is released:
+# - @surrealdb/tanstack-db: https://github.com/surrealdb/tanstack-db/pull/13 lazy-loads loro-crdt
+#   (CRDT-only, unused here; its top-level import crashes prerendering in the Worker)
+# - @tanstack/db: https://github.com/TanStack/db/pull/2460 compares classes with toJSON() (e.g. RecordId)
+#   by value, so eq(), joins, indexes and useLiveQuery identity work with record ids
 patchedDependencies:
   "@surrealdb/tanstack-db": patches/@surrealdb__tanstack-db.patch
+  "@tanstack/db": patches/@tanstack__db.patch

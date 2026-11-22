@@ -10,7 +10,7 @@ type AuthStatus = "loading" | "signed-in" | "signed-out"
 
 interface AuthContextValue {
   status: AuthStatus
-  userId: string | undefined
+  userId: RecordId<"user"> | undefined
   signIn: (variables: { email: string; pass: string }) => Promise<void>
   signUp: (variables: { email: string; pass: string }) => Promise<void>
   signOut: () => Promise<void>
@@ -41,13 +41,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // The same `db` instance the TanStack DB collections use, connected by <SurrealProvider client={db}>.
   const { client, isSuccess, isError } = useSurreal()
   const [status, setStatus] = useState<AuthStatus>("loading")
-  const [userId, setUserId] = useState<string>()
+  const [userId, setUserId] = useState<RecordId<"user">>()
 
   // The session only tells us who is signed in; the user's data comes from TanStack DB.
   const loadUserId = useCallback(async () => {
     const record = await client.auth<{ id: RecordId<"user"> }>()
-    // Same string form the adapter uses for record ids in `recordIds: "string"` mode.
-    setUserId(record ? String(record.id) : undefined)
+    setUserId(record?.id)
     setStatus(record ? "signed-in" : "signed-out")
   }, [client])
 
