@@ -31,6 +31,9 @@ export function parseRecordId(id: string): RecordId | null {
     const parsed = TextCodec.parseValue(id)
     return parsed instanceof RecordId ? parsed : null
   } catch {
-    return null
+    // The claim leaves keys unescaped, so a key starting with a digit (user:2b8vv…) fails to
+    // parse: the parser reads a number and then hits a letter. Treat the rest as a string key.
+    const match = /^([A-Za-z_][A-Za-z0-9_]*):(.+)$/.exec(id)
+    return match ? new RecordId(match[1]!, match[2]!) : null
   }
 }
