@@ -2,6 +2,9 @@ import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router"
 import { ThemeProvider } from "next-themes"
 import type { ReactNode } from "react"
 
+import { Header } from "../components/header"
+import { AuthProvider } from "../lib/auth"
+
 import appCss from "../styles.css?url"
 
 export const Route = createRootRoute({
@@ -29,7 +32,12 @@ function RootDocument({ children }: { children: ReactNode }) {
           enableSystem
           disableTransitionOnChange
         >
-          {children}
+          <AuthProvider>
+            <div className="flex min-h-screen flex-col">
+              <Header />
+              {children}
+            </div>
+          </AuthProvider>
         </ThemeProvider>
         <Scripts />
       </body>

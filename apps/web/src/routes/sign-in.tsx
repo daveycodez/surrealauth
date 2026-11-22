@@ -1,51 +1,40 @@
 import { Button, Card, Form, Input, Label, TextField } from "@heroui/react"
-import { createFileRoute, Link } from "@tanstack/react-router"
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 import { type FormEvent, useState } from "react"
 
-import { AuthResult, type AuthState, errorMessage } from "../components/auth-result"
-import { DATABASE, getDb, NAMESPACE } from "../lib/surreal"
+import { AuthError, errorMessage } from "../components/auth-result"
+import { useAuth } from "../lib/auth"
 
 export const Route = createFileRoute("/sign-in")({
   component: SignIn
 })
 
 function SignIn() {
-  const [state, setState] = useState<AuthState>({ status: "idle" })
+  const { signIn } = useAuth()
+  const navigate = useNavigate()
+  const [error, setError] = useState<string>()
   const [pending, setPending] = useState(false)
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
     setPending(true)
+    setError(undefined)
 
     try {
-      const db = await getDb()
-
-      // https://surrealdb.com/docs/learn/security/authentication/users#sign-in-as-a-record-user
-      await db.signin({
-        namespace: NAMESPACE,
-        database: DATABASE,
-
-        // Provide the name of the access method
-        access: "user",
-
-        // Provide the variables used by the signin query
-        variables: {
-          email: String(form.get("email")),
-          password: String(form.get("password"))
-        }
+      await signIn({
+        email: String(form.get("email")),
+        password: String(form.get("password"))
       })
-
-      setState({ status: "success", user: await db.auth() })
+      await navigate({ to: "/" })
     } catch (error) {
-      setState({ status: "error", message: errorMessage(error) })
-    } finally {
+      setError(errorMessage(error))
       setPending(false)
     }
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-6">
+    <main className="flex flex-1 items-center justify-center p-6">
       <Card className="w-full max-w-md">
         <Card.Header>
           <Card.Title>Sign in</Card.Title>
@@ -67,7 +56,7 @@ function SignIn() {
               Sign in
             </Button>
           </Form>
-          <AuthResult state={state} />
+          <AuthError message={error} />
         </Card.Content>
         <Card.Footer className="text-sm">
           No account yet?&nbsp;<Link to="/sign-up">Sign up</Link>
