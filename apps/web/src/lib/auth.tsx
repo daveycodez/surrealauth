@@ -45,7 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // The session only tells us who is signed in; the user's data comes from TanStack DB.
   const loadUserId = useCallback(async () => {
-    const record = await client.auth<{ id: RecordId<"users"> }>()
+    const record = await client.auth<{ id: RecordId<"user"> }>()
     // Same string form the adapter uses for record ids in `recordIds: "string"` mode.
     setUserId(record ? String(record.id) : undefined)
     setStatus(record ? "signed-in" : "signed-out")
@@ -120,7 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Stop the user's live sync and drop their cached rows so the next sign-in starts fresh.
     await users.cleanup({ dependents: true })
-    queryClient.removeQueries({ queryKey: ["users"] })
+    queryClient.removeQueries({ queryKey: ["user"] })
   }, [client])
 
   // If the connection fails, nobody can be signed in.

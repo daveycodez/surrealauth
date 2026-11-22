@@ -18,8 +18,7 @@
 # generators; `sync` keeps it current the same way. Like `typescript`, it is a
 # .json file or a directory (name defaults to schema.json).
 #
-# [typegen]
-# typescript = "src/types"           # relative to where surrealkit runs, the project root
-# filename   = "schema.generated.ts"   # keeps index.ts free for your own exports
-# format     = "biome check --write"   # or "prettier --write", "eslint --fix"
-# json       = "src/types"
+[typegen]
+typescript = "src/types" # relative to where surrealkit runs, the project root
+filename = "schema.generated.ts" # keeps index.ts free for your own exports
+format = "pnpm exec oxfmt" # formats with apps/web/.oxfmtrc.json

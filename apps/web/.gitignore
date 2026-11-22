@@ -9,3 +9,6 @@
 
 # TanStack Start
 .tanstack
+
+# SurrealKit typegen JSON schema document (regenerated; unused)
+database/types/

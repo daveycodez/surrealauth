@@ -25,6 +25,6 @@
 # SurrealDB conventions
 
 - Each app owns its own SurrealDB: its schema (`apps/<app>/database/`), `surrealkit.toml` and `.env` live inside the app, since apps can use different databases. Run SurrealKit from the app folder.
-- Use camelCase for table, field, index, param and access names in `apps/<app>/database/schema/*.surql` (e.g. `updatedAt`, `todoItems`), so SurrealKit-generated TypeScript types match our code with no case conversion. Never add a snake_case/camelCase mapping layer.
-- Table names are plural (e.g. `users`, `todos`, `orgMembers`), even when adapting SurrealDB docs examples that use singular names.
+- Use camelCase for table, field, index, param and access names in `apps/<app>/database/schema/*.surql` (e.g. `updatedAt`, `todoItem`), so SurrealKit-generated TypeScript types match our code with no case conversion. Never add a snake_case/camelCase mapping layer.
+- Table names are singular camelCase (e.g. `user`, `todo`, `orgMember`), matching SurrealDB's examples, so SurrealKit's generated interfaces get the natural type names (`user` → `User`).
 - Schema is applied with SurrealKit via the app's `db:sync` target (e.g. `pnpm nx run @surrealauth/web:db:sync`), not ad-hoc queries. It loads the app's `.env` and passes `JWT_SECRET` as the `${JWT_SECRET}` template variable (SurrealKit only reads connection settings from `.env` itself, so a bare `surrealkit sync` fails on the missing variable).
