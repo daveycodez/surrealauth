@@ -2,6 +2,8 @@ import { Surreal } from "surrealdb";
 import { useMutation } from "@tanstack/react-query";
 import React, { createContext, useContext, useEffect, useMemo, useCallback, useState } from "react";
 
+export const db = new Surreal();
+
 interface SurrealProviderProps {
     children: React.ReactNode;
     endpoint: string;

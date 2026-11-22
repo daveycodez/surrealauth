@@ -5,8 +5,8 @@ import type { ReactNode } from "react"
 
 import { Header } from "../components/header"
 import { AuthProvider } from "../lib/auth"
-import { DATABASE, db, NAMESPACE, queryClient, SURREAL_URL } from "../lib/surreal"
-import { SurrealProvider } from "../lib/surreal-provider"
+import { queryClient } from "../lib/collections"
+import { db, SurrealProvider } from "../lib/surreal-provider"
 
 import appCss from "../styles.css?url"
 
@@ -38,8 +38,8 @@ function RootDocument({ children }: { children: ReactNode }) {
           <QueryClientProvider client={queryClient}>
             <SurrealProvider
               client={db}
-              endpoint={SURREAL_URL}
-              params={{ namespace: NAMESPACE, database: DATABASE }}
+              endpoint={import.meta.env.VITE_SURREAL_URL}
+              params={{ namespace: "main", database: "main" }}
             >
               <AuthProvider>
                 <div className="flex min-h-screen flex-col">

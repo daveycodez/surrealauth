@@ -13,6 +13,9 @@ permissions:
 jobs:
   main:
     runs-on: ubuntu-latest
+    env:
+      # Public endpoint inlined into the client bundle by `vite build` (see apps/web/.env.example).
+      VITE_SURREAL_URL: wss://06h01ki929o216lckkdmj1d92c.surrealdb.earth/rpc
     steps:
       - uses: actions/checkout@v5
         with:

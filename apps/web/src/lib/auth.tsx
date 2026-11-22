@@ -2,8 +2,7 @@ import { eq, useLiveQuery } from "@tanstack/react-db"
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react"
 import type { RecordId } from "surrealdb"
 
-import { users } from "./collections"
-import { DATABASE, NAMESPACE, queryClient } from "./surreal"
+import { queryClient, users } from "./collections"
 import { useSurreal } from "./surreal-provider"
 
 type AuthStatus = "loading" | "signed-in" | "signed-out"
@@ -75,8 +74,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (variables) => {
       // https://surrealdb.com/docs/reference/query-language/statements/define/access/record#example-usage
       const tokens = await client.signin({
-        namespace: NAMESPACE,
-        database: DATABASE,
+        namespace: "main",
+        database: "main",
 
         // Provide the name of the access method
         access: "account",
@@ -95,8 +94,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (variables) => {
       // https://surrealdb.com/docs/reference/query-language/statements/define/access/record#example-usage
       const tokens = await client.signup({
-        namespace: NAMESPACE,
-        database: DATABASE,
+        namespace: "main",
+        database: "main",
 
         // Provide the name of the access method
         access: "account",
