@@ -2,7 +2,7 @@ import { Avatar, Dropdown, Label, Separator, Skeleton } from "@heroui/react"
 import { buttonVariants } from "@heroui/styles"
 import { Link, useNavigate } from "@tanstack/react-router"
 
-import { useAuth, useCurrentUser } from "../lib/auth"
+import { useAuth, useUser } from "../lib/auth"
 import type { User } from "../lib/collections"
 
 export function Header() {
@@ -32,13 +32,14 @@ export function Header() {
 }
 
 function AccountArea() {
-  const { status, user } = useCurrentUser()
+  const { status } = useAuth()
+  const { data: user, isLoading } = useUser()
 
-  if (status === "loading") {
+  if (status === "loading" || isLoading) {
     return <Skeleton className="size-8 rounded-full" />
   }
 
-  if (status === "signed-out" || !user) {
+  if (!user) {
     return (
       <Link to="/sign-in" className={buttonVariants({ variant: "primary", size: "sm" })}>
         Sign in

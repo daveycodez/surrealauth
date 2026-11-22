@@ -1,9 +1,12 @@
+import { QueryClientProvider } from "@tanstack/react-query"
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router"
 import { ThemeProvider } from "next-themes"
 import type { ReactNode } from "react"
 
 import { Header } from "../components/header"
 import { AuthProvider } from "../lib/auth"
+import { DATABASE, db, NAMESPACE, queryClient, SURREAL_URL } from "../lib/surreal"
+import { SurrealProvider } from "../lib/surreal-provider"
 
 import appCss from "../styles.css?url"
 
@@ -32,12 +35,20 @@ function RootDocument({ children }: { children: ReactNode }) {
           enableSystem
           disableTransitionOnChange
         >
-          <AuthProvider>
-            <div className="flex min-h-screen flex-col">
-              <Header />
-              {children}
-            </div>
-          </AuthProvider>
+          <QueryClientProvider client={queryClient}>
+            <SurrealProvider
+              client={db}
+              endpoint={SURREAL_URL}
+              params={{ namespace: NAMESPACE, database: DATABASE }}
+            >
+              <AuthProvider>
+                <div className="flex min-h-screen flex-col">
+                  <Header />
+                  {children}
+                </div>
+              </AuthProvider>
+            </SurrealProvider>
+          </QueryClientProvider>
         </ThemeProvider>
         <Scripts />
       </body>

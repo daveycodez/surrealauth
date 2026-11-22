@@ -7,16 +7,7 @@ export const NAMESPACE = "main"
 export const DATABASE = "main"
 
 // Module-level client and query client, as in @surrealdb/tanstack-db's examples.
+// The same `db` instance is handed to <SurrealProvider client={db}>, which connects it,
+// so the TanStack DB collections and useSurrealClient() share one connection.
 export const db = new Surreal()
 export const queryClient = new QueryClient()
-
-let connection: Promise<Surreal> | undefined
-
-// Opens the shared connection once, in the browser, on first use.
-export function connect() {
-  connection ??= db
-    .connect(SURREAL_URL, { namespace: NAMESPACE, database: DATABASE })
-    .then(() => db)
-
-  return connection
-}
