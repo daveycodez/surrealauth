@@ -8,7 +8,8 @@ import { db } from "./surreal-provider"
 
 export type { User }
 
-export const queryClient = new QueryClient()
+// TanStack DB collections get their own QueryClient, separate from the app-wide one in router.tsx.
+const queryClient = new QueryClient()
 
 const userOptions = {
   db,
