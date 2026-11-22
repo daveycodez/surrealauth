@@ -23,9 +23,8 @@ function SignUp() {
 
     try {
       await signUp({
-        name: String(form.get("name")),
         email: String(form.get("email")),
-        password: String(form.get("password"))
+        pass: String(form.get("password"))
       })
       await navigate({ to: "/" })
     } catch (error) {
@@ -45,10 +44,6 @@ function SignUp() {
         </Card.Header>
         <Card.Content className="flex flex-col gap-4">
           <Form className="flex flex-col gap-4" onSubmit={onSubmit}>
-            <TextField isRequired variant="secondary" name="name">
-              <Label>Name</Label>
-              <Input placeholder="John Doe" />
-            </TextField>
             <TextField isRequired variant="secondary" name="email" type="email">
               <Label>Email</Label>
               <Input placeholder="john.doe@example.com" />

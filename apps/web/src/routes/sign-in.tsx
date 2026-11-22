@@ -24,7 +24,7 @@ function SignIn() {
     try {
       await signIn({
         email: String(form.get("email")),
-        password: String(form.get("password"))
+        pass: String(form.get("password"))
       })
       await navigate({ to: "/" })
     } catch (error) {

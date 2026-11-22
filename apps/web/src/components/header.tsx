@@ -48,9 +48,11 @@ function AccountArea() {
   return <AccountMenu user={user} />
 }
 
-function initials(name: string) {
+function initials(user: User) {
+  if (!user.name) return user.email[0]?.toUpperCase() ?? "?"
+
   return (
-    name
+    user.name
       .split(/\s+/)
       .filter(Boolean)
       .slice(0, 2)
@@ -76,16 +78,16 @@ function AccountMenu({ user }: { user: User }) {
     <Dropdown>
       <Dropdown.Trigger aria-label="Account menu" className="rounded-full">
         <Avatar size="sm">
-          <Avatar.Fallback>{initials(user.name)}</Avatar.Fallback>
+          <Avatar.Fallback>{initials(user)}</Avatar.Fallback>
         </Avatar>
       </Dropdown.Trigger>
       <Dropdown.Popover placement="bottom end">
         <div className="flex items-center gap-2 px-3 pt-3 pb-2">
           <Avatar size="sm">
-            <Avatar.Fallback>{initials(user.name)}</Avatar.Fallback>
+            <Avatar.Fallback>{initials(user)}</Avatar.Fallback>
           </Avatar>
           <div className="flex min-w-0 flex-col">
-            <p className="truncate text-sm leading-5 font-medium">{user.name}</p>
+            <p className="truncate text-sm leading-5 font-medium">{user.name ?? user.email}</p>
             <p className="truncate text-xs leading-none text-muted">{user.email}</p>
           </div>
         </div>

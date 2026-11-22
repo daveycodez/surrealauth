@@ -5,7 +5,7 @@ import { DATABASE, getDb, NAMESPACE } from "./surreal"
 
 export interface User {
   id: RecordId
-  name: string
+  name?: string
   email: string
 }
 
@@ -14,8 +14,8 @@ type AuthStatus = "loading" | "signed-in" | "signed-out"
 interface AuthContextValue {
   status: AuthStatus
   user: User | undefined
-  signIn: (variables: { email: string; password: string }) => Promise<void>
-  signUp: (variables: { name: string; email: string; password: string }) => Promise<void>
+  signIn: (variables: { email: string; pass: string }) => Promise<void>
+  signUp: (variables: { email: string; pass: string }) => Promise<void>
   signOut: () => Promise<void>
 }
 
@@ -75,13 +75,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (variables) => {
       const db = await getDb()
 
-      // https://surrealdb.com/docs/learn/security/authentication/users#sign-in-as-a-record-user
+      // https://surrealdb.com/docs/reference/query-language/statements/define/access/record#example-usage
       const tokens = await db.signin({
         namespace: NAMESPACE,
         database: DATABASE,
 
         // Provide the name of the access method
-        access: "user",
+        access: "account",
 
         // Provide the variables used by the signin query
         variables
@@ -97,13 +97,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (variables) => {
       const db = await getDb()
 
-      // https://surrealdb.com/docs/learn/security/authentication/users#sign-up-as-a-user-record
+      // https://surrealdb.com/docs/reference/query-language/statements/define/access/record#example-usage
       const tokens = await db.signup({
         namespace: NAMESPACE,
         database: DATABASE,
 
         // Provide the name of the access method
-        access: "user",
+        access: "account",
 
         // Provide the variables used by the signup query
         variables

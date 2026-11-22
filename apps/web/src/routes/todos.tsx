@@ -22,7 +22,8 @@ function Todos() {
             <Skeleton className="h-5 w-48 rounded-md" />
           ) : status === "signed-in" && user ? (
             <p>
-              You are signed in as <strong>{user.name}</strong> ({user.email}).
+              You are signed in as <strong>{user.name ?? user.email}</strong>
+              {user.name ? ` (${user.email})` : ""}.
             </p>
           ) : (
             <p>
