@@ -3,5 +3,9 @@
   "semi": false,
   "trailingComma": "none",
   "sortImports": true,
-  "ignorePatterns": ["pnpm-lock.yaml"]
+  "ignorePatterns": [
+    "pnpm-lock.yaml",
+    "packages/react/src/surreal-provider.tsx",
+    "apps/web/src/lib/cookie.ts"
+  ]
 }

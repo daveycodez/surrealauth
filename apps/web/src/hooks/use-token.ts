@@ -3,9 +3,9 @@ import type { Tokens } from "surrealdb"
 
 import { isTokenExpired } from "../lib/token"
 
-// The current access and refresh tokens. Nothing fetches them: useAuthSubscription writes them
-// whenever the client's auth state changes, and they are restored from IndexedDB on load.
-// Disabled so a fetch on load can't overwrite the restored tokens, and never stale or collected.
+// The current access and refresh tokens, in memory. Nothing fetches them: useAuthSubscription
+// writes them whenever the client's auth state changes, and restores them from the auth cookie on
+// load. Disabled so nothing fetches over them, and never stale or collected.
 // An expired access token with no refresh token reads as null.
 export function useToken() {
   return useQuery<Tokens | null>({

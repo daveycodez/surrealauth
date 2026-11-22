@@ -7,7 +7,8 @@ DEFINE TABLE user SCHEMAFULL
 
 DEFINE FIELD name ON user TYPE option<string>;
 DEFINE FIELD email ON user TYPE string ASSERT string::is_email($value);
-DEFINE FIELD password ON user TYPE string;
+-- Never sent to clients (from https://github.com/surrealdb/examples/blob/main/notes-kit/src/schema/user.surql).
+DEFINE FIELD password ON user TYPE string PERMISSIONS FOR select NONE;
 
 -- One account per email address (named per our camelCase convention)
 DEFINE INDEX uniqueEmail ON user FIELDS email UNIQUE;

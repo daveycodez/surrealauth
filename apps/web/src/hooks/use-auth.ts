@@ -1,4 +1,4 @@
-import { useSurrealClient } from "../lib/surreal-provider";
+import { useSurrealClient } from "@surrealauth/react";
 
 export function useAuth() {
     const client = useSurrealClient();

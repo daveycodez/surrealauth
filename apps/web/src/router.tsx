@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query"
+import { defaultShouldDehydrateQuery, QueryClient } from "@tanstack/react-query"
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client"
 import { createRouter } from "@tanstack/react-router"
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query"
@@ -6,9 +6,18 @@ import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query
 import { createIDBPersister } from "./lib/idb-persister"
 import { routeTree } from "./routeTree.gen"
 
-// Saves the app-wide QueryClient to IndexedDB. TanStack DB collections use their own
-// QueryClient and persist to SQLite instead.
+// Saves the app-wide QueryClient to IndexedDB, except ["token"]: the auth cookie holds the
+// tokens (lib/cookie.ts). TanStack DB collections use their own QueryClient and persist to SQLite.
 const persister = createIDBPersister()
+const persistOptions = {
+  persister,
+  // Bumped when the token moved to the cookie, discarding caches that still hold it.
+  buster: "cookie-token",
+  dehydrateOptions: {
+    shouldDehydrateQuery: (query: Parameters<typeof defaultShouldDehydrateQuery>[0]) =>
+      query.queryKey[0] !== "token" && defaultShouldDehydrateQuery(query)
+  }
+}
 
 export function getRouter() {
   // The app-wide QueryClient (useQuery, useToken). TanStack DB collections use their own.
@@ -20,7 +29,7 @@ export function getRouter() {
     scrollRestoration: true,
     defaultPreload: "intent",
     Wrap: ({ children }) => (
-      <PersistQueryClientProvider client={queryClient} persistOptions={{ persister }}>
+      <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
         {children}
       </PersistQueryClientProvider>
     )
