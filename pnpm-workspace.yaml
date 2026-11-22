@@ -3,6 +3,8 @@ packages:
   - packages/*
 
 allowBuilds:
+  # Its postinstall only downloads the PowerSync core extension, which TanStack DB does not use.
+  "@journeyapps/wa-sqlite": false
   "@swc/core": true
   esbuild: true
   nx: true
