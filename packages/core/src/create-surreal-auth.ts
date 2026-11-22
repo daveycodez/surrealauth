@@ -1,13 +1,25 @@
-import { type ConnectionStatus, type ConnectOptions, type RecordId, Surreal } from "surrealdb"
+import {
+  type ConnectionStatus,
+  type ConnectOptions,
+  type RecordId,
+  ServerError,
+  Surreal
+} from "surrealdb"
 
 import { createAuthActions } from "./lib/auth-actions"
 import {
   type AuthCookie,
   DEFAULT_AUTH_COOKIE,
   readAuthCookie,
+  removeAuthCookie,
   subscribeAuthCookie
 } from "./lib/cookie"
-import { setupCookieAuth } from "./lib/cookie-auth"
+import {
+  type Credential,
+  connectAuthentication,
+  savedCredentials,
+  setupCookieAuth
+} from "./lib/cookie-auth"
 import { parseRecordId, type TokenClaims, tokenClaims } from "./lib/token-helpers"
 
 export type SurrealAuthConfig = {
@@ -17,7 +29,7 @@ export type SurrealAuthConfig = {
   // The record access method users sign in with, e.g. "account".
   access: string
   cookie?: Partial<AuthCookie>
-  options?: Omit<ConnectOptions, "namespace" | "database">
+  options?: Omit<ConnectOptions, "namespace" | "database" | "authentication">
 }
 
 export type SurrealAuth = ReturnType<typeof createSurrealAuth>
@@ -31,8 +43,49 @@ export function createSurrealAuth(config: SurrealAuthConfig) {
   const stopCookieAuth = setupCookieAuth(db, { namespace, database, access, cookie })
   const auth = createAuthActions(db, { namespace, database, access, cookie })
 
-  function connect() {
-    return db.connect(endpoint, { ...options, namespace, database })
+  // Signs in from the cookie as part of connecting, so queries sent meanwhile wait for the session
+  // instead of running as a guest. A rejected access token falls back to the refresh token, and if
+  // every saved credential is rejected, the cookie is forgotten and the client connects as a guest.
+  async function connect() {
+    for (const credential of savedCredentials({ namespace, database, access, cookie })) {
+      try {
+        return await connectWith(credential)
+      } catch (error) {
+        if (!(error instanceof ServerError)) throw error
+      }
+    }
+
+    if (readAuthCookie(cookie)) removeAuthCookie(cookie)
+    return connectWith(null)
+  }
+
+  async function connectWith(credential: Credential | null) {
+    const connecting = db.connect(endpoint, {
+      ...options,
+      namespace,
+      database,
+      authentication: connectAuthentication(credential)
+    })
+    if (!credential) return connecting
+
+    // When the server rejects the credential, the SDK (2.2.2) publishes an error and then stays
+    // "connecting" forever (https://github.com/surrealdb/surrealdb.js/issues/749). So take the
+    // error as the rejection, and close to reset the client.
+    let unsubscribe = () => {}
+    const rejected = new Promise<never>((_, reject) => {
+      unsubscribe = db.subscribe("error", (error) => {
+        if (error instanceof ServerError) reject(error)
+      })
+    })
+
+    try {
+      return await Promise.race([connecting, rejected])
+    } catch (error) {
+      if (error instanceof ServerError) await db.close()
+      throw error
+    } finally {
+      unsubscribe()
+    }
   }
 
   function close() {

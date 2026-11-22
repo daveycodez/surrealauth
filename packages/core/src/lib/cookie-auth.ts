@@ -11,41 +11,53 @@ type CookieAuthConfig = {
   cookie: AuthCookie
 }
 
-// Keeps the client's session and the auth cookie in step. Returns a function that stops it.
+export type Credential = string | Parameters<Surreal["signin"]>[0]
+
+// For connect()'s authentication option: hands over the credential once, on the first connect.
+// Reconnects restore the session the SDK already holds, and the SDK's renewal of an expiring token
+// then gets nothing, so it signs out and setupCookieAuth renews with the refresh token.
+export function connectAuthentication(credential: Credential | null) {
+  let used = false
+  return () => {
+    if (used) return null
+    used = true
+    return credential
+  }
+}
+
+// The saved session as credentials to sign in with while connecting, best first: the access token
+// while it's valid, then the refresh token.
+export function savedCredentials({
+  namespace,
+  database,
+  access,
+  cookie
+}: CookieAuthConfig): Credential[] {
+  const saved = readAuthCookie(cookie)
+  if (!saved) return []
+
+  const credentials: Credential[] = []
+  if (!isTokenExpired(saved.access)) credentials.push(saved.access)
+  // signin, not refresh: https://github.com/surrealdb/surrealdb/issues/7718
+  if (saved.refresh) {
+    credentials.push({ namespace, database, access, variables: { refresh: saved.refresh } })
+  }
+  return credentials
+}
+
+// Saves the session to the auth cookie on every auth event, and renews it with the refresh token
+// when the access token expires. Returns a function that stops it.
 export function setupCookieAuth(
   db: Surreal,
   { namespace, database, access, cookie }: CookieAuthConfig
 ) {
-  function forgetIfRejected(error: unknown) {
-    if (error instanceof ServerError) removeAuthCookie(cookie)
-  }
-
-  // signin, not refresh: https://github.com/surrealdb/surrealdb/issues/7718
   function signInWithRefresh(refresh: string) {
-    return db
-      .signin({ namespace, database, access, variables: { refresh } })
-      .catch(forgetIfRejected)
+    return db.signin({ namespace, database, access, variables: { refresh } }).catch((error) => {
+      if (error instanceof ServerError) removeAuthCookie(cookie)
+    })
   }
 
-  const unsubscribeConnected = db.subscribe("connected", () => {
-    const saved = readAuthCookie(cookie)
-    if (!saved || db.accessToken) return
-
-    const { access: accessToken, refresh } = saved
-
-    if (!isTokenExpired(accessToken)) {
-      db.authenticate(accessToken).catch((error) => {
-        if (error instanceof ServerError && refresh) signInWithRefresh(refresh)
-        else forgetIfRejected(error)
-      })
-    } else if (refresh) {
-      signInWithRefresh(refresh)
-    } else {
-      removeAuthCookie(cookie)
-    }
-  })
-
-  const unsubscribeAuth = db.subscribe("auth", (tokens) => {
+  return db.subscribe("auth", (tokens) => {
     const saved = readAuthCookie(cookie)
 
     if (tokens) {
@@ -60,9 +72,4 @@ export function setupCookieAuth(
     if (saved?.refresh) signInWithRefresh(saved.refresh)
     else removeAuthCookie(cookie)
   })
-
-  return () => {
-    unsubscribeConnected()
-    unsubscribeAuth()
-  }
 }
