@@ -1,5 +1,5 @@
 import { Card } from "@heroui/react"
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, Link } from "@tanstack/react-router"
 
 import { ThemeSwitcher } from "../components/theme-switcher"
 
@@ -17,6 +17,10 @@ function Home() {
             A barebones TanStack Start app exploring SurrealDB&apos;s built-in auth.
           </Card.Description>
         </Card.Header>
+        <Card.Content className="flex gap-4 text-sm">
+          <Link to="/sign-up">Sign up</Link>
+          <Link to="/sign-in">Sign in</Link>
+        </Card.Content>
         <Card.Footer>
           <ThemeSwitcher />
         </Card.Footer>
