@@ -204,6 +204,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@surrealdb/tanstack-db': ad6338156aec7c78edd5b7106ae59f0dac5688b1372849f9b109bfd8e978108e
+
 importers:
 
   .:
@@ -256,6 +259,24 @@ importers:
       '@heroui/styles':
         specifier: ^3.2.7
         version: 3.2.7(tailwindcss@4.3.5)
+      '@standard-schema/spec':
+        specifier: ^1.1.0
+        version: 1.1.0
+      '@surrealdb/tanstack-db':
+        specifier: 1.0.0-alpha.1
+        version: 1.0.0-alpha.1(patch_hash=ad6338156aec7c78edd5b7106ae59f0dac5688b1372849f9b109bfd8e978108e)(@standard-schema/spec@1.1.0)(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@tanstack/query-db-collection@1.5.2(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@typescript/typescript6@6.0.2))(@typescript/typescript6@6.0.2)(surrealdb@2.2.2(@typescript/typescript6@6.0.2)(tslib@2.9.1))
+      '@tanstack/db':
+        specifier: 1.0.0-rc.1.5
+        version: 1.0.0-rc.1.5(@typescript/typescript6@6.0.2)
+      '@tanstack/query-db-collection':
+        specifier: ^1.5.2
+        version: 1.5.2(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@typescript/typescript6@6.0.2)
+      '@tanstack/react-db':
+        specifier: 1.0.0-rc.1.5
+        version: 1.0.0-rc.1.5(@typescript/typescript6@6.0.2)(react@19.3.1)
+      '@tanstack/react-query':
+        specifier: ^5.108.2
+        version: 5.108.2(@types/react@19.3.0)(react@19.3.1)
       '@tanstack/react-router':
         specifier: ^1.170.46
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -2266,6 +2287,9 @@ packages:
   '@speed-highlight/core@1.2.24':
     resolution: {integrity: sha512-qeW2e1l78afw8VhRPfPQ1Gjj+KU5XFQ/OFV5ti6eTa9bruO7mJyZtA4vw0ofqmA3tKCkROE9xLk3VZoeRc98nw==}
 
+  '@standard-schema/spec@1.1.0':
+    resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
   '@surrealdb/cbor@2.0.0-alpha.4':
     resolution: {integrity: sha512-l/hNZ3ZCOJq8rzwx1y5ZV/8b2bYCWdhGqRVY33Pu50NAHyAW5qLsMn3ZBkZow77mAKwNCsbDsRGnyYEuU95mjw==}
     engines: {node: '>=18.0.0'}
@@ -2275,6 +2299,15 @@ packages:
     peerDependencies:
       tslib: ^2.6.3
       typescript: ^5.0.0
+
+  '@surrealdb/tanstack-db@1.0.0-alpha.1':
+    resolution: {integrity: sha512-1kxVa9ZW6u9dvVz2sWEnJOrxxg1SbEH6WBLz59eBPA9jxf7OkOAZDryWqB4PGmAUkiTO8zQ9Xpny4twkaqycMg==}
+    peerDependencies:
+      '@standard-schema/spec': ^1.1.0
+      '@tanstack/db': ^1.0.0-rc.1.5
+      '@tanstack/query-core': ^5.107.1
+      '@tanstack/query-db-collection': ^1.5.2
+      surrealdb: ^2.2.2
 
   '@swc-node/core@1.15.0':
     resolution: {integrity: sha512-WAerrrl087WgenB92XG4Th2t0NQFfMNLYSe0sW2cEMMqM/LQmP4rozsDJl0vuzTrbewjpKQryxFXI+aYig/dBg==}
@@ -2484,6 +2517,21 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
+  '@tanstack/db-ivm@1.0.0-rc.1.3':
+    resolution: {integrity: sha512-4LhRE/6nypOURscUzRyjqffaANVBK8TDv/011cLz79NMxNpZuNgjzwV3s9Z+Rb1d4je+ooRBfPt8hPmGp6dPMw==}
+    peerDependencies:
+      typescript: '>=4.7'
+
+  '@tanstack/db-sqlite-persistence-core@1.0.0-rc.1.5':
+    resolution: {integrity: sha512-R8X53vv6/qhZMtGIGQubpQAKtH/kED9s0L6MaVTu2Hk7LNWFaWyfhcTRDclR6dMdKYitwBEn6kVu2VCM7hOxng==}
+    peerDependencies:
+      typescript: '>=4.7'
+
+  '@tanstack/db@1.0.0-rc.1.5':
+    resolution: {integrity: sha512-Cpbrc7e1ZcM5j+l/hltVB4IuA6P2i1Py7WRqUsbb0Whof/eylpEfJzx0wgw/2PiOF+s3wJlIXArmghe/zjZR/g==}
+    peerDependencies:
+      typescript: '>=4.7'
+
   '@tanstack/history@1.162.5':
     resolution: {integrity: sha512-w1+YvwmTkwt5n8yUqEH3IWZ9DsmorCZW/EQ3KYHnqEgIkOZpH54NvW6/Epq3Dzb8H0ifIeYX8PExvrNLIH5FIA==}
     engines: {node: '>=20.19'}
@@ -2492,6 +2540,34 @@ packages:
     resolution: {integrity: sha512-9Ta/GMGPcqBIqlbrqeYyqBVKEP7XyAXy6nn90bPiE2oHB6KPgjEweUbHNXLQ6Pim01VtMMNf0dmUFMGKKHXmlw==}
     engines: {node: '>=20.12.0'}
     hasBin: true
+
+  '@tanstack/pacer-lite@0.3.0':
+    resolution: {integrity: sha512-+YeHKWX5Zd1Irga2smwAolGtzOcf8VVYhM2QI5XEA5TN58iKKufTjhvrbTCEgLLglR1ynHMGVT/l4m5PkwOdaw==}
+    engines: {node: '>=20'}
+
+  '@tanstack/query-core@5.108.2':
+    resolution: {integrity: sha512-0l+0xDKqn71hfJBKaAvFP/X7WYM0TbscEk6nK1pHaWQUWUEA+WJD0VlT8wF+HIJANMV9B/DouPWwDnX3w/l9BA==}
+
+  '@tanstack/query-db-collection@1.5.2':
+    resolution: {integrity: sha512-N1We6WDnLy5nGctQjtCihc6xBy3nbLMeLLDebouNY3dB01AcsRWh1Cop0/xeJ/47pm9J9+BFz3q9k1NzfAu7VQ==}
+    peerDependencies:
+      '@tanstack/db': ^1.0.0-rc.0
+      '@tanstack/query-core': ^5.90.15
+      typescript: '>=4.7'
+
+  '@tanstack/react-db@1.0.0-rc.1.5':
+    resolution: {integrity: sha512-6IDdNA8iNYtEAfbFkI/32gKC2INlV6b17CweaDpyfLdkQ+LyX/qWxDFBL6rKsS29crkAitepPkG3zXDHZpFBEw==}
+    peerDependencies:
+      react: '>=18.0.0'
+
+  '@tanstack/react-query@5.108.2':
+    resolution: {integrity: sha512-wV6hEjVGTfh9rvu3uREYW0hgBfS9klDejGelhPY575jD5jg6qbAb1nzT7hR1Q+wemR66ZjtE5p9pAGUwqK8zbg==}
+    peerDependencies:
+      '@types/react': ^18 || ^19
+      react: ^18 || ^19
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
 
   '@tanstack/react-router@1.170.46':
     resolution: {integrity: sha512-ez1iNIhsPjGlaDHg3BXWs67EWVIYzB2tbopEHYDESdkO7owgkGb5de52+5Kv2v1fxdkggcNzo35bdk4arTVGQw==}
@@ -3299,6 +3375,10 @@ packages:
     resolution: {integrity: sha512-0iirZp3uVDjVGt9p49aTaqjk84TrglENEDuqfdlZQ1roC9CWlPk6Avf8EEnZNcAqPonwkG35x4n3ww/1THYAeQ==}
     engines: {node: '>= 12.20'}
 
+  fractional-indexing@3.4.0:
+    resolution: {integrity: sha512-8J3glhz2rrpKG6KmI7wmJo3zH1VjeOpN+vTJSw1fOyO+Viqq3zX6/5NGh6oaZB2qIAYdOYuu5Dz9xp4faOO0Pg==}
+    engines: {node: ^14.13.1 || >=16.0.0}
+
   fs-constants@1.0.0:
     resolution: {integrity: sha512-y6OAwoSIf7FyjMIv94u+b5rdheZEjzR63GTyZJm5qh4Bi+2YgwLCcI/fPFZkL5PSixOt6ZNKm+w+Hfp/Bciwow==}
 
@@ -3579,6 +3659,9 @@ packages:
   loose-envify@1.4.0:
     resolution: {integrity: sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q==}
     hasBin: true
+
+  loro-crdt@1.18.0:
+    resolution: {integrity: sha512-e/96j7B6MUMVc+AilrY6c/Q4+0uNGhBIqhRosadqeEM1d9+IMpxYKy2mL22NIj6ILuZfP0fF5cYTkipxgbddHg==}
 
   lru-cache@5.1.1:
     resolution: {integrity: sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==}
@@ -6169,6 +6252,8 @@ snapshots:
 
   '@speed-highlight/core@1.2.24': {}
 
+  '@standard-schema/spec@1.1.0': {}
+
   '@surrealdb/cbor@2.0.0-alpha.4': {}
 
   '@surrealdb/sqon@0.2.1(@typescript/typescript6@6.0.2)(tslib@2.9.1)':
@@ -6177,6 +6262,18 @@ snapshots:
       tslib: 2.9.1
       typescript: '@typescript/typescript6@6.0.2'
       uuidv7: 1.2.1
+
+  '@surrealdb/tanstack-db@1.0.0-alpha.1(patch_hash=ad6338156aec7c78edd5b7106ae59f0dac5688b1372849f9b109bfd8e978108e)(@standard-schema/spec@1.1.0)(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@tanstack/query-db-collection@1.5.2(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@typescript/typescript6@6.0.2))(@typescript/typescript6@6.0.2)(surrealdb@2.2.2(@typescript/typescript6@6.0.2)(tslib@2.9.1))':
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      '@tanstack/db': 1.0.0-rc.1.5(@typescript/typescript6@6.0.2)
+      '@tanstack/db-sqlite-persistence-core': 1.0.0-rc.1.5(@typescript/typescript6@6.0.2)
+      '@tanstack/query-core': 5.108.2
+      '@tanstack/query-db-collection': 1.5.2(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@typescript/typescript6@6.0.2)
+      loro-crdt: 1.18.0
+      surrealdb: 2.2.2(@typescript/typescript6@6.0.2)(tslib@2.9.1)
+    transitivePeerDependencies:
+      - typescript
 
   '@swc-node/core@1.15.0(@swc/core@1.16.22(@swc/helpers@0.5.24))(@swc/types@0.1.28)':
     dependencies:
@@ -6340,9 +6437,52 @@ snapshots:
       tailwindcss: 4.3.5
       vite: 8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.0)
 
+  '@tanstack/db-ivm@1.0.0-rc.1.3(@typescript/typescript6@6.0.2)':
+    dependencies:
+      fractional-indexing: 3.4.0
+      typescript: '@typescript/typescript6@6.0.2'
+
+  '@tanstack/db-sqlite-persistence-core@1.0.0-rc.1.5(@typescript/typescript6@6.0.2)':
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      '@tanstack/db': 1.0.0-rc.1.5(@typescript/typescript6@6.0.2)
+      typescript: '@typescript/typescript6@6.0.2'
+
+  '@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2)':
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      '@tanstack/db-ivm': 1.0.0-rc.1.3(@typescript/typescript6@6.0.2)
+      '@tanstack/pacer-lite': 0.3.0
+      typescript: '@typescript/typescript6@6.0.2'
+
   '@tanstack/history@1.162.5': {}
 
   '@tanstack/intent@0.5.6': {}
+
+  '@tanstack/pacer-lite@0.3.0': {}
+
+  '@tanstack/query-core@5.108.2': {}
+
+  '@tanstack/query-db-collection@1.5.2(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@typescript/typescript6@6.0.2)':
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      '@tanstack/db': 1.0.0-rc.1.5(@typescript/typescript6@6.0.2)
+      '@tanstack/query-core': 5.108.2
+      typescript: '@typescript/typescript6@6.0.2'
+
+  '@tanstack/react-db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2)(react@19.3.1)':
+    dependencies:
+      '@tanstack/db': 1.0.0-rc.1.5(@typescript/typescript6@6.0.2)
+      react: 19.3.1
+    transitivePeerDependencies:
+      - typescript
+
+  '@tanstack/react-query@5.108.2(@types/react@19.3.0)(react@19.3.1)':
+    dependencies:
+      '@tanstack/query-core': 5.108.2
+      react: 19.3.1
+    optionalDependencies:
+      '@types/react': 19.3.0
 
   '@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
@@ -7225,6 +7365,8 @@ snapshots:
       node-domexception: 1.0.0
       web-streams-polyfill: 4.0.0-beta.3
 
+  fractional-indexing@3.4.0: {}
+
   fs-constants@1.0.0: {}
 
   fsevents@2.3.3:
@@ -7437,6 +7579,8 @@ snapshots:
   loose-envify@1.4.0:
     dependencies:
       js-tokens: 4.0.0
+
+  loro-crdt@1.18.0: {}
 
   lru-cache@5.1.1:
     dependencies:

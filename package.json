@@ -9,7 +9,8 @@
     "lint": "nx run-many -t lint",
     "typecheck": "nx run-many -t typecheck",
     "format": "nx format:write",
-    "format:check": "nx format:check"
+    "format:check": "nx format:check",
+    "db:sync": "set -a && . ./.env && set +a && surrealkit sync --var JWT_SECRET=\"$JWT_SECRET\""
   },
   "devDependencies": {
     "@nx/js": "24.0.6",

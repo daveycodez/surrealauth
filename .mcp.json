@@ -2,8 +2,11 @@
   "mcpServers": {
     "surrealkit": {
       "type": "stdio",
-      "command": "surrealkit",
-      "args": ["mcp"],
+      "command": "sh",
+      "args": [
+        "-c",
+        "set -a && . ./.env && set +a && SURREALKIT_VAR_JWT_SECRET=\"$JWT_SECRET\" exec surrealkit mcp"
+      ],
       "env": {}
     }
   }

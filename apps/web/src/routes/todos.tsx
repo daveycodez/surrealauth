@@ -1,14 +1,14 @@
 import { Card, Skeleton } from "@heroui/react"
 import { createFileRoute, Link } from "@tanstack/react-router"
 
-import { useAuth } from "../lib/auth"
+import { useCurrentUser } from "../lib/auth"
 
 export const Route = createFileRoute("/todos")({
   component: Todos
 })
 
 function Todos() {
-  const { status, user } = useAuth()
+  const { status, user } = useCurrentUser()
 
   return (
     <main className="flex flex-1 items-center justify-center p-6">

@@ -1,19 +1,15 @@
+import { eq, useLiveQuery } from "@tanstack/react-db"
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react"
 import type { RecordId } from "surrealdb"
 
-import { DATABASE, getDb, NAMESPACE } from "./surreal"
-
-export interface User {
-  id: RecordId
-  name?: string
-  email: string
-}
+import { type User, users } from "./collections"
+import { connect, DATABASE, NAMESPACE, queryClient } from "./surreal"
 
 type AuthStatus = "loading" | "signed-in" | "signed-out"
 
 interface AuthContextValue {
   status: AuthStatus
-  user: User | undefined
+  userId: string | undefined
   signIn: (variables: { email: string; pass: string }) => Promise<void>
   signUp: (variables: { email: string; pass: string }) => Promise<void>
   signOut: () => Promise<void>
@@ -42,12 +38,14 @@ function writeToken(token: string | null) {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading")
-  const [user, setUser] = useState<User>()
+  const [userId, setUserId] = useState<string>()
 
-  const loadUser = useCallback(async () => {
-    const db = await getDb()
-    const record = await db.auth<User>()
-    setUser(record ?? undefined)
+  // The session only tells us who is signed in; the user's data comes from TanStack DB.
+  const loadUserId = useCallback(async () => {
+    const db = await connect()
+    const record = await db.auth<{ id: RecordId<"users"> }>()
+    // Same string form the adapter uses for record ids in `recordIds: "string"` mode.
+    setUserId(record ? String(record.id) : undefined)
     setStatus(record ? "signed-in" : "signed-out")
   }, [])
 
@@ -55,25 +53,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     async function restore() {
       try {
-        const db = await getDb()
+        const db = await connect()
         const token = readToken()
         if (!token) throw new Error("No saved session")
 
         await db.authenticate(token)
-        await loadUser()
+        await loadUserId()
       } catch {
         writeToken(null)
-        setUser(undefined)
+        setUserId(undefined)
         setStatus("signed-out")
       }
     }
 
     void restore()
-  }, [loadUser])
+  }, [loadUserId])
 
   const signIn = useCallback<AuthContextValue["signIn"]>(
     async (variables) => {
-      const db = await getDb()
+      const db = await connect()
 
       // https://surrealdb.com/docs/reference/query-language/statements/define/access/record#example-usage
       const tokens = await db.signin({
@@ -88,14 +86,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
 
       writeToken(tokens.access)
-      await loadUser()
+      await loadUserId()
     },
-    [loadUser]
+    [loadUserId]
   )
 
   const signUp = useCallback<AuthContextValue["signUp"]>(
     async (variables) => {
-      const db = await getDb()
+      const db = await connect()
 
       // https://surrealdb.com/docs/reference/query-language/statements/define/access/record#example-usage
       const tokens = await db.signup({
@@ -110,21 +108,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
 
       writeToken(tokens.access)
-      await loadUser()
+      await loadUserId()
     },
-    [loadUser]
+    [loadUserId]
   )
 
   const signOut = useCallback(async () => {
-    const db = await getDb()
+    const db = await connect()
     await db.invalidate()
     writeToken(null)
-    setUser(undefined)
+    setUserId(undefined)
     setStatus("signed-out")
+
+    // Stop the user's live sync and drop their cached rows so the next sign-in starts fresh.
+    await users.cleanup({ dependents: true })
+    queryClient.removeQueries({ queryKey: ["users"] })
   }, [])
 
   return (
-    <AuthContext.Provider value={{ status, user, signIn, signUp, signOut }}>
+    <AuthContext.Provider value={{ status, userId, signIn, signUp, signOut }}>
       {children}
     </AuthContext.Provider>
   )
@@ -134,4 +136,24 @@ export function useAuth() {
   const context = useContext(AuthContext)
   if (!context) throw new Error("useAuth must be used within AuthProvider")
   return context
+}
+
+// The signed-in user, live from TanStack DB: updates as soon as the record changes.
+export function useCurrentUser() {
+  const { status, userId } = useAuth()
+
+  const { data: user, isReady } = useLiveQuery({
+    query: (q) => {
+      if (!userId) return undefined
+      return q
+        .from({ user: users })
+        .where(({ user }) => eq(user.id, userId))
+        .findOne()
+    }
+  })
+
+  return {
+    status: status === "signed-in" && !isReady ? ("loading" as const) : status,
+    user: user as User | undefined
+  }
 }

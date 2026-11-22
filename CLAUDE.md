@@ -24,5 +24,6 @@
 
 # SurrealDB conventions
 
-- Use camelCase for table, field, index, param and access names in `database/schema/*.surql` (e.g. `updatedAt`, `todoItem`), so SurrealKit-generated TypeScript types match our code with no case conversion. Never add a snake_case/camelCase mapping layer.
-- Schema lives in `database/schema/` and is applied with SurrealKit (`surrealkit sync`), not ad-hoc queries.
+- Use camelCase for table, field, index, param and access names in `database/schema/*.surql` (e.g. `updatedAt`, `todoItems`), so SurrealKit-generated TypeScript types match our code with no case conversion. Never add a snake_case/camelCase mapping layer.
+- Table names are plural (e.g. `users`, `todos`, `orgMembers`), even when adapting SurrealDB docs examples that use singular names.
+- Schema lives in `database/schema/` and is applied with SurrealKit via `pnpm db:sync`, not ad-hoc queries. It loads `.env` and passes `JWT_SECRET` as the `${JWT_SECRET}` template variable (SurrealKit only reads connection settings from `.env` itself, so a bare `surrealkit sync` fails on the missing variable).
