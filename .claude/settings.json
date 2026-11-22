@@ -1,4 +1,7 @@
 {
+  "enabledPlugins": {
+    "nx@nx-claude-plugins": true
+  },
   "extraKnownMarketplaces": {
     "nx-claude-plugins": {
       "source": {
@@ -7,17 +10,14 @@
       }
     }
   },
-  "enabledPlugins": {
-    "nx@nx-claude-plugins": true
-  },
   "sandbox": {
     "network": {
       "allowedDomains": ["www.google-analytics.com"],
       "allowUnixSockets": ["/tmp/.nx", "~/.nx"]
     },
     "filesystem": {
-      "allowRead": ["/tmp/.nx", "~/.nx"],
-      "allowWrite": ["/tmp/.nx", "~/.nx"]
+      "allowWrite": ["/tmp/.nx", "~/.nx"],
+      "allowRead": ["/tmp/.nx", "~/.nx"]
     }
   }
 }

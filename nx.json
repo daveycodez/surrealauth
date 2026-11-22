@@ -27,5 +27,18 @@
       }
     }
   ],
-  "analytics": false
+  "analytics": false,
+  "targetDefaults": {
+    "build": {
+      "cache": true,
+      "dependsOn": ["^build"],
+      "inputs": ["production", "^production"]
+    },
+    "dev": {
+      "continuous": true
+    },
+    "preview": {
+      "continuous": true
+    }
+  }
 }

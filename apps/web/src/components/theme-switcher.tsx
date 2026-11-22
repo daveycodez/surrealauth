@@ -1,14 +1,18 @@
 import { Button } from "@heroui/react"
 import { useTheme } from "next-themes"
-import { useEffect, useState } from "react"
+import { useSyncExternalStore } from "react"
 
 const themes = ["light", "dark", "system"] as const
 
-export function ThemeSwitcher() {
-  const [mounted, setMounted] = useState(false)
-  const { theme, setTheme } = useTheme()
+const subscribe = () => () => {}
 
-  useEffect(() => setMounted(true), [])
+export function ThemeSwitcher() {
+  const mounted = useSyncExternalStore(
+    subscribe,
+    () => true,
+    () => false
+  )
+  const { theme, setTheme } = useTheme()
 
   return (
     <div className="flex items-center gap-2">

@@ -4,19 +4,19 @@
   "private": true,
   "license": "MIT",
   "scripts": {
-    "dev": "nx run web:dev",
+    "dev": "nx run @surrealauth/web:dev",
     "build": "nx run-many -t build",
     "lint": "nx run-many -t lint",
     "typecheck": "nx run-many -t typecheck",
-    "format": "oxfmt",
-    "format:check": "oxfmt --check"
+    "format": "nx format:write",
+    "format:check": "nx format:check"
   },
   "devDependencies": {
     "@nx/js": "24.0.6",
     "@nx/oxlint": "24.0.6",
-    "@swc-node/register": "1.11.1",
-    "@swc/core": "1.15.8",
-    "@swc/helpers": "0.5.18",
+    "@swc-node/register": "1.12.1",
+    "@swc/core": "1.16.22",
+    "@swc/helpers": "0.5.24",
     "@types/node": "^24.0.0",
     "@typescript/native": "npm:typescript@^7.0.2",
     "nx": "24.0.6",

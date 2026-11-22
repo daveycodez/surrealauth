@@ -4,8 +4,23 @@
   "categories": {
     "correctness": "error"
   },
-  "rules": {},
+  "rules": {
+    "@nx/enforce-module-boundaries": [
+      "error",
+      {
+        "enforceBuildableLibDependency": true,
+        "allow": [],
+        "depConstraints": [
+          {
+            "sourceTag": "*",
+            "onlyDependOnLibsWithTags": ["*"]
+          }
+        ]
+      }
+    ]
+  },
   "env": {
     "builtin": true
-  }
+  },
+  "jsPlugins": ["@nx/oxlint/boundaries-plugin"]
 }

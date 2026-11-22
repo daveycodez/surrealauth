@@ -28,8 +28,8 @@ pnpm nx run web:build      # vite build + static prerender
 pnpm nx run web:preview    # preview the build in workerd
 pnpm nx run web:deploy     # build + wrangler deploy (worker: surrealauth)
 
-pnpm lint                  # oxlint
+pnpm lint                  # oxlint (@nx/oxlint, batched)
 pnpm typecheck             # tsc (TypeScript 7)
-pnpm format                # oxfmt
+pnpm format                # nx format:write (oxfmt)
 pnpm format:check
 ```
