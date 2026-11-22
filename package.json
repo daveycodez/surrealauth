@@ -29,7 +29,7 @@
   "packageManager": "pnpm@12.6.0",
   "intent": {
     "skills": [
-      "@tanstack/*"
+      "*"
     ]
   }
 }
