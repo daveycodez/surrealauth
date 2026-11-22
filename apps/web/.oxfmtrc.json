@@ -7,10 +7,5 @@
     "stylesheet": "./src/styles.css",
     "functions": ["cn", "tv"]
   },
-  "ignorePatterns": [
-    "src/routeTree.gen.ts",
-    "worker-configuration.d.ts",
-    "src/lib/cookie.ts",
-    "src/hooks/use-auth.ts"
-  ]
+  "ignorePatterns": ["src/routeTree.gen.ts", "worker-configuration.d.ts"]
 }

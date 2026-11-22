@@ -12,6 +12,7 @@ export function Providers({ children }: { children: ReactNode }) {
         client={db}
         endpoint={import.meta.env.VITE_SURREAL_URL}
         params={{ namespace: "main", database: "main" }}
+        access="account"
       >
         {children}
       </SurrealProvider>

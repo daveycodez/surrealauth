@@ -4,7 +4,6 @@ import type { ReactNode } from "react"
 
 import { Header } from "../components/header"
 import { Providers } from "../components/providers"
-import { useAuthSubscription } from "../hooks/use-auth-subscription"
 
 import appCss from "../styles.css?url"
 
@@ -23,8 +22,6 @@ export const Route = createRootRouteWithContext<{
 })
 
 function RootDocument({ children }: { children: ReactNode }) {
-  useAuthSubscription()
-
   return (
     <html lang="en" suppressHydrationWarning>
       <head>

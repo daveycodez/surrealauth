@@ -2,16 +2,24 @@ import { Surreal } from "surrealdb";
 import { useMutation } from "@tanstack/react-query";
 import React, { createContext, useContext, useEffect, useMemo, useCallback, useState } from "react";
 
+import { type ConnectParams, useCookieAuth } from "../hooks/use-cookie-auth";
+import { type AuthCookie, DEFAULT_AUTH_COOKIE } from "../lib/cookie";
+
 interface SurrealProviderProps {
     children: React.ReactNode;
     endpoint: string;
     client?: Surreal;
-    params?: Parameters<Surreal["connect"]>[1];
+    params: ConnectParams;
     autoConnect?: boolean;
+    access: string;
+    cookie?: Partial<AuthCookie>;
 }
 
 interface SurrealProviderState {
     client: Surreal;
+    params: ConnectParams;
+    access: string;
+    cookie: AuthCookie;
     isConnecting: boolean;
     isSuccess: boolean;
     isError: boolean;
@@ -26,10 +34,18 @@ export function SurrealProvider({
     children,
     client,
     endpoint,
-    params,
+    params: paramsProp,
     autoConnect = true,
+    access,
+    cookie: cookieProp,
 }: SurrealProviderProps) {
     const [instance] = useState(() => client ?? new Surreal());
+
+    const paramsKey = JSON.stringify(paramsProp);
+    const params = useMemo(() => paramsProp, [paramsKey]);
+
+    const cookieKey = JSON.stringify(cookieProp ?? {});
+    const cookie = useMemo(() => ({ ...DEFAULT_AUTH_COOKIE, ...cookieProp }), [cookieKey]);
 
     const {
         mutateAsync: connectMutation,
@@ -45,6 +61,8 @@ export function SurrealProvider({
     const connect = useCallback(() => connectMutation(), [connectMutation]);
     const close = useCallback(() => instance.close(), [instance]);
 
+    useCookieAuth(instance, access, params, cookie);
+
     useEffect(() => {
         if (autoConnect) connect();
 
@@ -55,8 +73,8 @@ export function SurrealProvider({
     }, [autoConnect, connect, reset, instance]);
 
     const value: SurrealProviderState = useMemo(
-        () => ({ client: instance, isConnecting: isPending, isSuccess, isError, error, connect, close }),
-        [instance, isPending, isSuccess, isError, error, connect, close],
+        () => ({ client: instance, params, access, cookie, isConnecting: isPending, isSuccess, isError, error, connect, close }),
+        [instance, params, access, cookie, isPending, isSuccess, isError, error, connect, close],
     );
 
     return <SurrealContext.Provider value={value}>{children}</SurrealContext.Provider>;

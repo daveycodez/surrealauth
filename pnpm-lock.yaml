@@ -302,9 +302,6 @@ importers:
       idb-keyval:
         specifier: ^6.3.0
         version: 6.3.0
-      js-cookie:
-        specifier: ^3.0.8
-        version: 3.0.8
       next-themes:
         specifier: ^0.4.6
         version: 0.4.6(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -324,9 +321,6 @@ importers:
       '@tailwindcss/vite':
         specifier: ^4.3.5
         version: 4.3.5(vite@8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.0))
-      '@types/js-cookie':
-        specifier: ^3.0.6
-        version: 3.0.6
       '@types/react':
         specifier: ^19.3.0
         version: 19.3.0
@@ -347,10 +341,17 @@ importers:
         version: 4.166.0(@types/node@24.19.2)
 
   packages/react:
+    dependencies:
+      js-cookie:
+        specifier: ^3.0.8
+        version: 3.0.8
     devDependencies:
       '@tanstack/react-query':
         specifier: ^5.108.2
         version: 5.108.2(@types/react@19.3.0)(react@19.3.1)
+      '@types/js-cookie':
+        specifier: ^3.0.6
+        version: 3.0.6
       '@types/react':
         specifier: ^19.3.0
         version: 19.3.0

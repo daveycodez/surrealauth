@@ -1,8 +1,8 @@
 import { Avatar, Dropdown, Label, Separator, Skeleton } from "@heroui/react"
 import { buttonVariants } from "@heroui/styles"
+import { useAuth } from "@surrealauth/react"
 import { Link, useNavigate } from "@tanstack/react-router"
 
-import { useAuth } from "../hooks/use-auth"
 import { useUser } from "../hooks/use-user"
 import type { User } from "../types/schema.generated"
 

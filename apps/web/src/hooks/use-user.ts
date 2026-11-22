@@ -1,27 +1,17 @@
+import { useSurreal, useAuthId } from "@surrealauth/react"
 import { eq, useLiveQuery } from "@tanstack/react-db"
-import { useIsMutating, useIsRestoring } from "@tanstack/react-query"
-import { RecordId } from "surrealdb"
+import { useHydrated } from "@tanstack/react-router"
 
 import { users } from "../lib/collections"
-import { tokenClaims } from "../lib/token"
-import { useToken } from "./use-token"
-
-// SurrealDB puts the signed-in record in the access token's `ID` claim, e.g. "user:abc".
-function userIdFromToken(token: string) {
-  const { ID } = tokenClaims(token)
-  const separator = ID.indexOf(":")
-  return new RecordId("user", ID.slice(separator + 1))
-}
 
 // The signed-in user, live from TanStack DB: updates as soon as the record changes.
 // Disabled (status "disabled", data undefined) while nobody is signed in. isLoading also covers
-// restoring the token from IndexedDB and checking it with the server, which a disabled live
-// query can't tell apart from being signed out.
+// connecting, which includes signing in from the auth cookie: a disabled live query can't tell
+// that apart from being signed out.
 export function useUser() {
-  const isRestoring = useIsRestoring()
-  const isAuthenticating = useIsMutating({ mutationKey: ["authenticate"] }) > 0
-  const { data: tokens } = useToken()
-  const userId = tokens ? userIdFromToken(tokens.access) : undefined
+  const hydrated = useHydrated()
+  const { isConnecting } = useSurreal()
+  const userId = useAuthId()
 
   const query = useLiveQuery({
     query: (q) => {
@@ -33,5 +23,5 @@ export function useUser() {
     }
   })
 
-  return { ...query, isLoading: isRestoring || isAuthenticating || query.isLoading }
+  return { ...query, isLoading: (!hydrated || isConnecting || query.isLoading) && !query.data }
 }
