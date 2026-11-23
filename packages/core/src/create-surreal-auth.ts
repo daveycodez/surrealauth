@@ -1,4 +1,5 @@
 import {
+  ConnectionUnavailableError,
   type ConnectionStatus,
   type ConnectOptions,
   type RecordId,
@@ -88,6 +89,48 @@ export function createSurrealAuth(config: SurrealAuthConfig) {
     }
   }
 
+  let reconnecting: Promise<unknown> | undefined
+
+  function disconnected() {
+    return new Promise<void>((resolve) => {
+      if (db.status === "disconnected") return resolve()
+      const unsubscribe = db.subscribe("disconnected", () => {
+        unsubscribe()
+        resolve()
+      })
+    })
+  }
+
+  async function reconnect() {
+    // close() can return before the old socket closes, and its late event would kill a new connection.
+    reconnecting ??= Promise.all([disconnected(), db.close().catch(() => {})])
+      .then(() => connect())
+      .finally(() => {
+        reconnecting = undefined
+      })
+    await reconnecting
+  }
+
+  // The SDK can report "connected" with no usable socket, so a rejected send also reconnects.
+  async function withConnection<T>(action: () => Promise<T>) {
+    if (db.status === "disconnected") await reconnect()
+    try {
+      return await action()
+    } catch (error) {
+      if (!(error instanceof ConnectionUnavailableError)) throw error
+      await reconnect()
+      return action()
+    }
+  }
+
+  function login(email: string, password: string) {
+    return withConnection(() => auth.login(email, password))
+  }
+
+  function register(email: string, password: string) {
+    return withConnection(() => auth.register(email, password))
+  }
+
   function close() {
     stopCookieAuth()
     return db.close()
@@ -157,6 +200,8 @@ export function createSurrealAuth(config: SurrealAuthConfig) {
     connect,
     close,
     ...auth,
+    login,
+    register,
     getToken,
     subscribeToken,
     getTokenClaims,
