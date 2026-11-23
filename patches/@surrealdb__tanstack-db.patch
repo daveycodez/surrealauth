@@ -1,5 +1,5 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3ccf3743b 100644
+index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..f86ba3a483c28bfee7ef0702e19a9d6d192896ce 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
 @@ -1,7 +1,6 @@
@@ -10,7 +10,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  let surrealdb = require("surrealdb");
  let _tanstack_query_core = require("@tanstack/query-core");
  let _tanstack_db = require("@tanstack/db");
-@@ -250,11 +249,97 @@ const toRecordId = (tableName, id) => {
+@@ -250,11 +249,117 @@ const toRecordId = (tableName, id) => {
  	const key = normalized.startsWith(prefixed) ? normalized.slice(prefixed.length) : normalized;
  	return new surrealdb.RecordId(tableName, key);
  };
@@ -78,6 +78,14 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 +	return value;
 +};
 +const convertPath = (value, path, convert) => {
++	if (path[0] === "*") {
++		const rest = path.slice(1);
++		const convertItem = (item) => convertPath(item, rest, convert);
++		if (Array.isArray(value)) return value.map(convertItem);
++		if (value instanceof Set) return new Set([...value].map(convertItem));
++		if (!isPlainObject(value)) return value;
++		return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, convertItem(item)]));
++	}
 +	if (Array.isArray(value) && path.length > 0) return value.map((item) => convertPath(item, path, convert));
 +	if (value instanceof Set && path.length > 0) return new Set([...value].map((item) => convertPath(item, path, convert)));
 +	if (path.length === 0) return convert(value);
@@ -88,6 +96,18 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 +		...value,
 +		[head]: convertPath(value[head], rest, convert)
 +	};
++};
++const matchesFieldPattern = (pattern, path) => {
++	if (pattern.length === 0) return path.length === 0;
++	const [head, ...rest] = pattern;
++	if (head === "*") return matchesFieldPattern(rest, path) || path.length > 0 && matchesFieldPattern(rest, path.slice(1));
++	return path.length > 0 && String(path[0]) === head && matchesFieldPattern(rest, path.slice(1));
++};
++/** Whether a queried path is a record-link field, honoring `*` segments. */
++const isRecordFieldPath = (fields, path) => {
++	if (fields.has(path.join("."))) return true;
++	for (const field of fields) if (field.includes("*") && matchesFieldPattern(field.split("."), path)) return true;
++	return false;
 +};
 +/**
 +* Converts the configured record-link fields (dot paths) of a row from
@@ -108,7 +128,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  	const canonical = asCanonicalRecordIdString(key);
  	if (!canonical) return key;
  	return state.has(canonical) ? canonical : key;
-@@ -340,53 +425,250 @@ const stripEnvelopeFields = (value) => {
+@@ -340,53 +445,280 @@ const stripEnvelopeFields = (value) => {
  	for (const key of ENVELOPE_FIELDS) delete copy[key];
  	return copy;
  };
@@ -186,18 +206,33 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 +	if (typeof value === "object" && value !== null && "sql" in value && typeof value.sql === "string") return value;
 +	throw new Error("Unsupported where expression node.");
 +};
-+const joinLogical = (op, args) => {
-+	const parts = args.map(toSqlFragment).map((frag) => frag.sql);
-+	if (parts.length === 0) return { sql: op === "AND" ? "true" : "false" };
-+	if (parts.length === 1) return { sql: parts[0] };
-+	return { sql: parts.map((part) => `(${part})`).join(` ${op} `) };
++const joinSql = (op, parts) => {
++	if (parts.length === 0) return op === "AND" ? "true" : "false";
++	if (parts.length === 1) return parts[0];
++	return parts.map((part) => `(${part})`).join(` ${op} `);
 +};
++const sqlFragment = (sql, narrow) => sql === narrow ? { sql } : {
++	sql,
++	narrow
++};
++const joinLogical = (op, args) => {
++	const fragments = args.map(toSqlFragment);
++	return sqlFragment(joinSql(op, fragments.map((frag) => frag.sql)), joinSql(op, fragments.map((frag) => frag.narrow ?? frag.sql)));
++};
++const negate = (arg) => {
++	const frag = toSqlFragment(arg);
++	return sqlFragment(`NOT (${frag.narrow ?? frag.sql})`, `NOT (${frag.sql})`);
++};
++const LOCAL_ONLY = {
++	sql: "true",
++	narrow: "false"
++};
++const isStringRecordField = (table, options, fieldPath) => options.recordFields !== void 0 && isRecordFieldPath(options.recordFields, mapRelationPath(toFieldPath(fieldPath), table.relation));
 +const filterValueFor = (table, options, fieldPath, value) => {
 +	if (!options.recordFields) return normalizeFilterValue(value);
-+	const path = mapRelationPath(toFieldPath(fieldPath), table.relation);
-+	return options.recordFields.has(path.join(".")) ? toSurrealRecordId(value) : value;
++	return isStringRecordField(table, options, fieldPath) ? toSurrealRecordId(value) : value;
 +};
-+const whereSqlFrom = (table, expr, bind, scope, options = {}) => {
++const whereFragmentFrom = (table, expr, bind, scope, options = {}) => {
 +	const filterValue = (fieldPath, value) => filterValueFor(table, options, fieldPath, value);
 +	const fieldSql = (fieldPath) => {
 +		const field = formatFieldPath(mapRelationPath(toFieldPath(fieldPath), table.relation));
@@ -211,13 +246,16 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 +			throw new Error(`Cannot compare field '${field}' with undefined using '${op}'.`);
 +		}
 +		if (isReferencePathCandidate(value)) throw new Error("Got a field reference on the right side of a where comparison. Pass a concrete value.");
++		if (op !== "=" && op !== "!=") {
++			if (isStringRecordField(table, options, fieldPath)) return LOCAL_ONLY;
++		}
 +		return { sql: `${field} ${op} ${bind(filterValue(fieldPath, value))}` };
 +	};
-+	const fragment = (0, _tanstack_db.parseWhereExpression)(expr, {
++	return (0, _tanstack_db.parseWhereExpression)(expr, {
 +		handlers: {
 +			and: (...args) => joinLogical("AND", args),
 +			or: (...args) => joinLogical("OR", args),
-+			not: (arg) => ({ sql: `NOT (${toSqlFragment(arg).sql})` }),
++			not: negate,
 +			eq: (field, value) => comparison(field, "=", value),
 +			gt: (field, value) => comparison(field, ">", value),
 +			gte: (field, value) => comparison(field, ">=", value),
@@ -225,6 +263,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 +			lte: (field, value) => comparison(field, "<=", value),
 +			like: (field, value) => comparison(field, "LIKE", value),
 +			ilike: (field, value) => {
++				if (isStringRecordField(table, options, field)) return LOCAL_ONLY;
 +				return { sql: `string::lower(${fieldSql(field)}) LIKE string::lower(${bind(filterValue(field, value))})` };
 +			},
 +			in: (field, value) => {
@@ -240,12 +279,20 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 +		onUnknownOperator: (op) => {
 +			throw new Error(`Unsupported where operator '${op}' for SurrealQL translation.`);
 +		}
-+	});
-+	if (!fragment) return "";
-+	return fragment.sql;
++	}) ?? void 0;
 +};
++const whereSqlFrom = (table, expr, bind, scope, options = {}) => whereFragmentFrom(table, expr, bind, scope, options)?.sql ?? "";
 +const subsetFilters = (subset) => [subset?.where, subset?.cursor?.whereFrom].filter((expr) => Boolean(expr));
 +const filterSqlFrom = (table, subset, bind, scope, options = {}) => subsetFilters(subset).map((expr) => whereSqlFrom(table, expr, bind, scope, options)).filter(Boolean);
++/**
++* Whether LIMIT and START can run on the server. A filter or order the server
++* can't evaluate like TanStack DB would pick a different window, so those
++* subsets fetch every candidate row and TanStack DB applies the window.
++*/
++const pushesSubsetWindow = (table, subset, options = {}) => {
++	if (!options.recordFields) return true;
++	return subsetFilters(subset).every((expr) => whereFragmentFrom(table, expr, () => "$_", void 0, options)?.narrow === void 0) && !(0, _tanstack_db.parseOrderByExpression)(subset?.orderBy).some((clause) => isStringRecordField(table, options, clause.field));
++};
 +const isOrdered = (subset) => Boolean(subset?.orderBy?.length) || typeof subset?.limit === "number" || typeof subset?.offset === "number";
 +const subsetOrderOf = (table, subset) => {
 +	if (!isOrdered(subset)) return [];
@@ -267,7 +314,8 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 +	}
 +	return value;
 +};
-+const windowBoundaryOf = (table, subset, rows) => {
++const windowBoundaryOf = (table, subset, rows, options = {}) => {
++	if (!pushesSubsetWindow(table, subset, options)) return void 0;
 +	const limit = subset?.limit;
 +	if (typeof limit !== "number" || rows.length === 0) return void 0;
 +	if (rows.length < limit) return void 0;
@@ -296,8 +344,10 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 +	const whereParts = filterSqlFrom(table, subset, nextParam, void 0, options);
 +	const whereSql = whereParts.length ? ` WHERE ${whereParts.map((part) => `(${part})`).join(" AND ")}` : "";
 +	const order = subsetOrderOf(table, subset);
++	const orderSql = order.length ? ` ORDER BY ${order.map((clause) => `${formatFieldPath(clause.field)} ${clause.direction.toUpperCase()}`).join(", ")}` : "";
++	const windowed = pushesSubsetWindow(table, subset, options);
 +	return {
-+		sql: `SELECT * FROM type::table($table)${whereSql}${order.length ? ` ORDER BY ${order.map((clause) => `${formatFieldPath(clause.field)} ${clause.direction.toUpperCase()}`).join(", ")}` : ""}${typeof subset?.limit === "number" ? ` LIMIT ${nextParam(subset.limit)}` : ""}${typeof subset?.offset === "number" ? ` START ${nextParam(subset.offset)}` : ""};`,
++		sql: `SELECT * FROM type::table($table)${whereSql}${orderSql}${windowed && typeof subset?.limit === "number" ? ` LIMIT ${nextParam(subset.limit)}` : ""}${windowed && typeof subset?.offset === "number" ? ` START ${nextParam(subset.offset)}` : ""};`,
 +		params
 +	};
 +};
@@ -396,7 +446,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  		if (value instanceof Date) return value.toISOString();
  		if (value instanceof surrealdb.RecordId) return toRecordIdString(value);
  		if (typeof value === "bigint") return value.toString();
-@@ -400,9 +682,9 @@ const subsetCacheKey = (subset) => {
+@@ -400,9 +732,9 @@ const subsetCacheKey = (subset) => {
  		return value;
  	}) ?? "";
  };
@@ -408,7 +458,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  		return preferredByCanonical;
  	}
  	if (!value || typeof value !== "object") return preferredByCanonical;
-@@ -411,18 +693,19 @@ const normalizeSubsetValuesInPlace = (value, seen = /* @__PURE__ */ new WeakSet(
+@@ -411,18 +743,19 @@ const normalizeSubsetValuesInPlace = (value, seen = /* @__PURE__ */ new WeakSet(
  	const obj = value;
  	if (obj.type === "val" && "value" in obj) {
  		const canonical = asCanonicalRecordIdString(obj.value);
@@ -435,7 +485,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  };
  const rebindRecordIdIdentityDeep = (value, preferredByCanonical) => {
  	const canonical = asCanonicalRecordIdString(value);
-@@ -498,6 +781,279 @@ const applyPreferredRecordIdIdentityToCollection = (ctx, preferredByCanonical) =
+@@ -498,6 +831,280 @@ const applyPreferredRecordIdIdentityToCollection = (ctx, preferredByCanonical) =
  	const indexes = collectionWithInternals._indexes?.indexes;
  	if (entries && indexes) for (const index of indexes.values()) index.build?.(entries);
  };
@@ -539,8 +589,9 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 +		return live;
 +	};
 +	const missingFromSnapshot = (entry, rows) => {
-+		const { limit, offset } = entry.options;
-+		if (offset || signedOut) return [];
++		const windowed = pushesSubsetWindow(table, entry.options, config.queryOptions);
++		const limit = windowed ? entry.options.limit : void 0;
++		if ((windowed ? entry.options.offset : void 0) || signedOut) return [];
 +		const isFullWindow = typeof limit === "number" && rows.length >= limit;
 +		const leading = subsetOrderOf(table, entry.options)[0];
 +		const last = rows[rows.length - 1];
@@ -581,7 +632,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 +			const rows = await loadRows(entry.options);
 +			if (stale()) return release(opened.splice(0));
 +			await enqueue(entry, () => applySnapshot(entry, rows, stale));
-+			const boundary = windowBoundaryOf(table, entry.options, rows);
++			const boundary = windowBoundaryOf(table, entry.options, rows, config.queryOptions);
 +			if (live && boundary) {
 +				const bounded = await openLive(entry, buildLiveCondition(table, entry.options, boundary, config.queryOptions));
 +				if (bounded) {
@@ -715,7 +766,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  // src/internal/subset-tracker.ts
  var ActiveSubsetTracker = class {
  	subsetIds = /* @__PURE__ */ new Map();
-@@ -508,10 +1064,24 @@ var ActiveSubsetTracker = class {
+@@ -508,10 +1115,24 @@ var ActiveSubsetTracker = class {
  	has(id) {
  		return this.activeIds.has(id);
  	}
@@ -740,7 +791,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  	delete(key) {
  		this.subsetIds.delete(key);
  		this.rebuildActiveIds();
-@@ -542,184 +1112,47 @@ const toTableResource = (table) => {
+@@ -542,184 +1163,51 @@ const toTableResource = (table) => {
  	return new surrealdb.Table(normalized.name);
  };
  const tableNameOf = (table) => toTableOptions(table).name;
@@ -764,24 +815,24 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 -		const next = quoteIdentifier(segment);
 -		out = out ? `${out}.${next}` : next;
 +// src/schema.ts
-+const holdsText = (kind) => kind.kind === "string" || kind.kind === "union" && (kind.variants ?? []).some(holdsText);
-+const holdsRecord = (kind) => kind.kind === "record" || kind.kind === "union" && (kind.variants ?? []).some(holdsRecord);
-+const collectRecordPaths = (kind, path, out, table) => {
++const collectTerminalPaths = (kind, path, out) => {
 +	if (!kind) return;
 +	switch (kind.kind) {
 +		case "record":
-+			out.add(path.join("."));
++			out.records.add(path.join("."));
++			return;
++		case "string":
++			out.texts.add(path.join("."));
 +			return;
 +		case "union":
-+			if (holdsRecord(kind) && holdsText(kind)) throw new Error(`${table}.${path.join(".")} can hold both a record and a string, which string record ids cannot tell apart.`);
-+			for (const variant of kind.variants ?? []) collectRecordPaths(variant, path, out, table);
++			for (const variant of kind.variants ?? []) collectTerminalPaths(variant, path, out);
 +			return;
 +		case "array":
 +		case "set":
-+			collectRecordPaths(kind.item, path, out, table);
++			collectTerminalPaths(kind.item, path, out);
 +			return;
 +		case "objectLiteral":
-+			for (const field of kind.fields ?? []) collectRecordPaths(field.kind, [...path, field.name], out, table);
++			for (const field of kind.fields ?? []) collectTerminalPaths(field.kind, [...path, field.name], out);
 +			return;
  	}
 -	return out;
@@ -792,7 +843,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 -	if (path[0] === "from") return ["in", ...path.slice(1)];
 -	if (path[0] === "to") return ["out", ...path.slice(1)];
 -	return path;
- };
+-};
 -const normalizeFilterValue = (value) => {
 -	if (Array.isArray(value)) return value.map((item) => normalizeFilterValue(item));
 -	const native = toNativeRecordIdLikeValue(value);
@@ -803,7 +854,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 -const toSqlFragment = (value) => {
 -	if (typeof value === "object" && value !== null && "sql" in value && typeof value.sql === "string") return value;
 -	throw new Error("Unsupported where expression node.");
--};
+ };
 -const joinLogical = (op, args) => {
 -	const parts = args.map(toSqlFragment).map((frag) => frag.sql);
 -	if (parts.length === 0) return { sql: op === "AND" ? "true" : "false" };
@@ -857,25 +908,27 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 -		});
 -		if (!fragment) return "";
 -		return fragment.sql;
--	};
--	const whereParts = [];
--	if (subset?.where) {
--		const parsed = whereSqlFrom(subset.where);
--		if (parsed) whereParts.push(parsed);
 +/** Reads a table's relation flag and record-link fields from SurrealKit's `tables`. */
 +function schemaTableOptions(tables, name) {
 +	const table = tables.find((candidate) => candidate.name === name);
 +	if (!table) throw new Error(`Table "${name}" is not in the provided schema tables.`);
 +	const relation = table.type?.kind === "relation";
-+	const paths = /* @__PURE__ */ new Set();
++	const terminals = {
++		records: /* @__PURE__ */ new Set(),
++		texts: /* @__PURE__ */ new Set()
+ 	};
+-	const whereParts = [];
+-	if (subset?.where) {
+-		const parsed = whereSqlFrom(subset.where);
+-		if (parsed) whereParts.push(parsed);
 +	for (const field of table.fields ?? []) {
 +		if (!Array.isArray(field.path)) throw new Error("Expected tables from a version 2 schema document (surrealkit compile).");
-+		const path = field.path.filter((part) => part !== "*");
-+		collectRecordPaths(field.kind, path, paths, table.name);
++		collectTerminalPaths(field.kind, field.path, terminals);
  	}
 -	if (subset?.cursor?.whereFrom) {
 -		const cursorWhere = whereSqlFrom(subset.cursor.whereFrom);
 -		if (cursorWhere) whereParts.push(cursorWhere);
++	const paths = terminals.records;
 +	paths.delete("id");
 +	if (relation) {
 +		paths.delete("in");
@@ -883,6 +936,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  	}
 -	const whereSql = whereParts.length ? ` WHERE ${whereParts.map((part) => `(${part})`).join(" AND ")}` : "";
 -	const order = (0, _tanstack_db.parseOrderByExpression)(subset?.orderBy);
++	for (const path of paths) if (terminals.texts.has(path)) throw new Error(`${table.name}.${path} can hold both a record and a string, which string record ids cannot tell apart.`);
  	return {
 -		sql: `SELECT * FROM type::table($table)${whereSql}${order.length ? ` ORDER BY ${order.map((clause) => `${formatFieldPath(mapRelationPath(clause.field, table.relation))} ${clause.direction.toUpperCase()}`).join(", ")}` : ""}${typeof subset?.limit === "number" ? ` LIMIT ${nextParam(subset.limit)}` : ""}${typeof subset?.offset === "number" ? ` START ${nextParam(subset.offset)}` : ""};`,
 -		params
@@ -961,7 +1015,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  	};
  }
  // src/encryption/index.ts
-@@ -785,17 +1218,49 @@ var WebCryptoAESGCM = class WebCryptoAESGCM {
+@@ -785,17 +1273,49 @@ var WebCryptoAESGCM = class WebCryptoAESGCM {
  };
  // src/index.ts
  const NOOP = () => {};
@@ -1014,7 +1068,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  	const collectionId = config.id ?? deriveCollectionId(tableName, queryKey);
  	const tableResource = toTableResource(table);
  	const activeSubsets = new ActiveSubsetTracker();
-@@ -814,12 +1279,24 @@ function modernSurrealCollectionOptions(config) {
+@@ -814,12 +1334,24 @@ function modernSurrealCollectionOptions(config) {
  		if (!crdtApplyLocalChange) throw missingCrdtHandlers();
  		crdtApplyLocalChange(...args);
  	};
@@ -1041,7 +1095,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  		const normalized = normalizeRecordIdLikeValueDeep(row);
  		return {
  			...normalized,
-@@ -842,7 +1319,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -842,7 +1374,7 @@ function modernSurrealCollectionOptions(config) {
  		const merged = {
  			...stripEnvelopeFields(row),
  			...payload,
@@ -1050,7 +1104,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  		};
  		return normalizeRow(merged);
  	};
-@@ -861,10 +1338,13 @@ function modernSurrealCollectionOptions(config) {
+@@ -861,15 +1393,20 @@ function modernSurrealCollectionOptions(config) {
  	const updatesTableName = crdtEnabled ? tableNameOf(crdt.updatesTable) : void 0;
  	const updatesTable = crdtEnabled ? toTableResource(crdt.updatesTable) : void 0;
  	const snapshotsTableName = crdtEnabled && crdt.snapshotsTable ? tableNameOf(crdt.snapshotsTable) : void 0;
@@ -1066,7 +1120,34 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  		docs.set(id, doc);
  		return doc;
  	};
-@@ -937,14 +1417,14 @@ function modernSurrealCollectionOptions(config) {
+-	const docRef = (id) => new surrealdb.RecordId(tableName, id);
+-	const idFromDocRef = (doc) => toRecordKeyString(doc);
++	const docKeyOf = (id) => stringIds ? toIdString(id) : toRecordKeyString(id);
++	const docRef = (id) => stringIds ? toSurrealRecordId(id) : new surrealdb.RecordId(tableName, id);
++	const idFromDocRef = (doc) => docKeyOf(doc);
++	const aadKeyOf = (id) => stringIds ? toRecordKeyString(id) : id;
+ 	const resolveActor = (id, change) => {
+ 		if (!crdtEnabled) return void 0;
+ 		const candidate = crdt.actor ?? crdt.localActorId;
+@@ -892,7 +1429,7 @@ function modernSurrealCollectionOptions(config) {
+ 		}
+ 		const envelope = toEnvelope(row);
+ 		if (!envelope) return /* @__PURE__ */ new Uint8Array();
+-		const id = idFromDocRef(row.doc);
++		const id = aadKeyOf(idFromDocRef(row.doc));
+ 		return e2ee.crypto.decrypt({
+ 			envelope,
+ 			aad: aadFor({
+@@ -914,7 +1451,7 @@ function modernSurrealCollectionOptions(config) {
+ 			aad: aadFor({
+ 				table: targetTable ?? tableName,
+ 				baseTable: tableName,
+-				id,
++				id: aadKeyOf(id),
+ 				kind
+ 			})
+ 		});
+@@ -937,14 +1474,14 @@ function modernSurrealCollectionOptions(config) {
  		const id = toRecordKeyString(materialized.id);
  		if (!e2eeEnabled) {
  			const { id: _ignoredId, ...rest } = materialized;
@@ -1085,7 +1166,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  	};
  	const hydratePlainRows = async (rows, write, begin, commit, type = "insert") => {
  		if (!rows.length) return;
-@@ -960,7 +1440,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -960,7 +1497,7 @@ function modernSurrealCollectionOptions(config) {
  	};
  	const hydrateCrdtDoc = async (id, write, begin, commit, writeType = "insert") => {
  		if (!crdtEnabled || !updatesTableName) return;
@@ -1094,7 +1175,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  		let since;
  		if (snapshotsTableName) {
  			const snapshot = (await queryRows(db, `SELECT * FROM type::table($table) WHERE doc = $doc ORDER BY ts DESC LIMIT 1;`, {
-@@ -1009,17 +1489,13 @@ function modernSurrealCollectionOptions(config) {
+@@ -1009,17 +1546,13 @@ function modernSurrealCollectionOptions(config) {
  			live.subscribe(async (message) => {
  				if (message.action === "KILLED") return;
  				const row = message.value;
@@ -1114,7 +1195,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  						});
  					} finally {
  						ctx.commit();
-@@ -1058,7 +1534,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1058,7 +1591,7 @@ function modernSurrealCollectionOptions(config) {
  				const id = idFromDocRef(value.doc);
  				if (value.actor && value.actor === resolveActor(id)) return;
  				if (isStrictOnDemand && !activeSubsets.has(id)) return;
@@ -1123,7 +1204,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  				const bytes = await decodeUpdateBytes(value, "update");
  				if (!bytes.byteLength) return;
  				doc.import(bytes);
-@@ -1078,9 +1554,60 @@ function modernSurrealCollectionOptions(config) {
+@@ -1078,12 +1611,63 @@ function modernSurrealCollectionOptions(config) {
  				cleanupUpdateLive = NOOP;
  			};
  		};
@@ -1185,8 +1266,12 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 +			}
  			const key = subsetCacheKey(subset);
  			const rows = await tableAccess.loadSubset(subset);
- 			const ids = new Set(rows.map((row) => toRecordKeyString(row.id)));
-@@ -1104,7 +1631,11 @@ function modernSurrealCollectionOptions(config) {
+-			const ids = new Set(rows.map((row) => toRecordKeyString(row.id)));
++			const ids = new Set(rows.map((row) => docKeyOf(row.id)));
+ 			activeSubsets.set(key, ids);
+ 			const upsertWrite = (change) => {
+ 				if (change.type === "insert" && typeof ctx.collection?.has === "function" && ctx.collection.has(getKey(change.value))) {
+@@ -1104,7 +1688,11 @@ function modernSurrealCollectionOptions(config) {
  			await ensureUpdateLive();
  		};
  		const unloadSubset = (subset) => {
@@ -1199,7 +1284,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  			const key = subsetCacheKey(subset);
  			activeSubsets.delete(key);
  			if (activeSubsets.size === 0) {
-@@ -1121,6 +1652,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1121,6 +1709,7 @@ function modernSurrealCollectionOptions(config) {
  		};
  		const cleanup = () => {
  			killed = true;
@@ -1207,7 +1292,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  			activeSubsets.clear();
  			cleanupBaseLive();
  			cleanupUpdateLive();
-@@ -1132,16 +1664,24 @@ function modernSurrealCollectionOptions(config) {
+@@ -1132,16 +1721,24 @@ function modernSurrealCollectionOptions(config) {
  			unloadSubset
  		};
  	};
@@ -1234,7 +1319,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  				if (!meta?.loadSubsetOptions) return [];
  				if (!crdtEnabled) {
  					const rows = await tableAccess.loadSubset(meta?.loadSubsetOptions);
-@@ -1160,10 +1700,10 @@ function modernSurrealCollectionOptions(config) {
+@@ -1160,10 +1757,10 @@ function modernSurrealCollectionOptions(config) {
  				const normalized = normalizeRow(mutation.modified);
  				if (!crdtEnabled) {
  					const idKey = toRecordKeyString(normalized.id);
@@ -1247,7 +1332,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  					const recordPayload = await encodeBaseRow(payload, idKey);
  					if (isTempId(normalized.id, tableName)) {
  						const created = await db.create(tableResource).content(recordPayload);
-@@ -1171,20 +1711,20 @@ function modernSurrealCollectionOptions(config) {
+@@ -1171,20 +1768,20 @@ function modernSurrealCollectionOptions(config) {
  						const createdId = createdRow && createdRow.id ? createdRow.id : normalized.id;
  						const resolved = {
  							...normalized,
@@ -1265,13 +1350,14 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  					writeUtils.writeUpsert?.(normalized);
  					continue;
  				}
- 				const id = toRecordKeyString(normalized.id);
+-				const id = toRecordKeyString(normalized.id);
 -				const doc = getDoc(id);
++				const id = docKeyOf(normalized.id);
 +				const doc = await getDoc(id);
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "insert",
-@@ -1205,36 +1745,48 @@ function modernSurrealCollectionOptions(config) {
+@@ -1205,36 +1802,48 @@ function modernSurrealCollectionOptions(config) {
  			const writeUtils = getWriteUtils(params.collection.utils);
  			for (const mutation of params.transaction.mutations) {
  				if (mutation.type !== "update") continue;
@@ -1327,12 +1413,12 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  				}
 -				const id = toRecordKeyString(mutationId);
 -				const doc = getDoc(id);
-+				const id = toRecordKeyString(rowId);
++				const id = docKeyOf(rowId);
 +				const doc = await getDoc(id);
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "update",
-@@ -1255,18 +1807,20 @@ function modernSurrealCollectionOptions(config) {
+@@ -1255,18 +1864,20 @@ function modernSurrealCollectionOptions(config) {
  			const writeUtils = getWriteUtils(params.collection.utils);
  			for (const mutation of params.transaction.mutations) {
  				if (mutation.type !== "delete") continue;
@@ -1341,7 +1427,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
 +				const mutationKey = mutation.key;
 +				const mutationId = toSurrealId(mutationKey);
 +				const rowId = toRowId(mutationKey);
-+				const id = toRecordKeyString(rowId);
++				const id = docKeyOf(rowId);
  				if (!crdtEnabled) {
  					await db.delete(mutationId);
 -					writeUtils.writeDelete?.(`${tableName}:${id}`);
@@ -1358,7 +1444,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  				};
  				applyCrdtLocalChange(doc, localChange);
  				const bytes = doc.export({
-@@ -1274,7 +1828,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1274,7 +1885,7 @@ function modernSurrealCollectionOptions(config) {
  					from: vv
  				});
  				await persistCrdtUpdate(id, bytes, localChange);
@@ -1367,7 +1453,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  			}
  		})
  	});
-@@ -1297,7 +1851,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1297,7 +1908,7 @@ function modernSurrealCollectionOptions(config) {
  					const updates = await queryRows(db, `SELECT * FROM type::table($table) ORDER BY ts ASC;`, { table: updatesTableName });
  					for (const update of updates) {
  						const id = idFromDocRef(update.doc);
@@ -1376,7 +1462,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  						const bytes = await decodeUpdateBytes(update, "update");
  						if (!bytes.byteLength) continue;
  						doc.import(bytes);
-@@ -1341,15 +1895,35 @@ function modernSurrealCollectionOptions(config) {
+@@ -1341,15 +1952,35 @@ function modernSurrealCollectionOptions(config) {
  function surrealCollectionOptions(config) {
  	return modernSurrealCollectionOptions(config);
  }
@@ -1417,7 +1503,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..334cd52b83d803baafc21504b02af3f3
  exports.applyLoroJsonChange = applyLoroJsonChange;
  exports.applyLoroRichtextChange = applyLoroRichtextChange;
 diff --git a/dist/index.d.cts b/dist/index.d.cts
-index fd0f25c5fee73b3e59008e8462a04ae957ce1665..e6d5f0d862312e0066140688031a27d4c7b36ffc 100644
+index fd0f25c5fee73b3e59008e8462a04ae957ce1665..418f8698ccad2bdf6a2ae846b659eeb764568160 100644
 --- a/dist/index.d.cts
 +++ b/dist/index.d.cts
 @@ -1,14 +1,9 @@
@@ -1534,16 +1620,16 @@ index fd0f25c5fee73b3e59008e8462a04ae957ce1665..e6d5f0d862312e0066140688031a27d4
 +  id?: T['id'];
 +};
 +type AnyRecordId = RecordId<any, any, any>;
-+type OpaqueValue = Value | Date | ArrayBuffer | ArrayBufferView | Map<unknown, unknown> | Set<unknown> | ((...args: never[]) => unknown);
++type OpaqueValue = Value | Date | ArrayBuffer | ArrayBufferView | Map<unknown, unknown> | ((...args: never[]) => unknown);
 +/** `T` with every `RecordId`, at any depth, replaced by its string form. */
-+type StringRecordIds<T> = T extends AnyRecordId ? string : T extends OpaqueValue ? T : T extends readonly (infer Item)[] ? StringRecordIds<Item>[] : T extends object ? { [K in keyof T]: StringRecordIds<T[K]>; } : T;
++type StringRecordIds<T> = T extends AnyRecordId ? string : T extends OpaqueValue ? T : T extends ReadonlySet<infer Item> ? Set<StringRecordIds<Item>> : T extends readonly (infer Item)[] ? StringRecordIds<Item>[] : T extends object ? { [K in keyof T]: StringRecordIds<T[K]>; } : T;
 +type Decrement = [never, 0, 1, 2, 3, 4];
-+type RecordPathsOf<V, Path extends string, Depth extends number> = [Depth] extends [never] ? never : V extends AnyRecordId ? Path : V extends OpaqueValue ? never : V extends readonly (infer Item)[] ? RecordPathsOf<Item, Path, Depth> : V extends object ? { [K in keyof V & string]-?: RecordPathsOf<V[K], `${Path}.${K}`, Decrement[Depth]>; }[keyof V & string] : never;
++type RecordPathsOf<V, Path extends string, Depth extends number> = [Depth] extends [never] ? never : V extends AnyRecordId ? Path : V extends OpaqueValue ? never : V extends ReadonlySet<infer Item> ? RecordPathsOf<Item, Path, Depth> : V extends readonly (infer Item)[] ? RecordPathsOf<Item, Path, Depth> : V extends object ? { [K in keyof V & string]-?: RecordPathsOf<V[K], `${Path}.${K}`, Decrement[Depth]>; }[keyof V & string] : never;
 +/**
 + * Dot paths of the record-link fields of `T`, down to five levels. `id`, `in`
 + * and `out` are left out because the adapter handles them itself.
 + */
-+type RecordFieldPath<T> = { [K in Exclude<keyof T & string, 'id' | 'in' | 'out'>]-?: RecordPathsOf<T[K], K, 4>; }[Exclude<keyof T & string, 'id' | 'in' | 'out'>];
++type RecordFieldPath<T> = T extends unknown ? { [K in Exclude<keyof T & string, 'id' | 'in' | 'out'>]-?: RecordPathsOf<T[K], K, 4>; }[Exclude<keyof T & string, 'id' | 'in' | 'out'>] : never;
 +/** Requires SurrealKit's `tables` when `T` has record-link fields. */
 +type RequiredSchemaTables<T> = [RecordFieldPath<T>] extends [never] ? {
 +  tables?: readonly SurrealSchemaTable[];
@@ -1600,7 +1686,7 @@ index fd0f25c5fee73b3e59008e8462a04ae957ce1665..e6d5f0d862312e0066140688031a27d4
 +export type { SurrealSchemaTable };
 \ No newline at end of file
 diff --git a/dist/index.d.mts b/dist/index.d.mts
-index f239d858e8d8d88ac67aeb3681cf563940ac4124..59cbc6aa2099a89b572726f21160660b97cf806b 100644
+index f239d858e8d8d88ac67aeb3681cf563940ac4124..2691ce9ae1c871be6f5cfc39e0a8245664960f34 100644
 --- a/dist/index.d.mts
 +++ b/dist/index.d.mts
 @@ -1,14 +1,9 @@
@@ -1718,16 +1804,16 @@ index f239d858e8d8d88ac67aeb3681cf563940ac4124..59cbc6aa2099a89b572726f21160660b
 +  id?: T['id'];
 +};
 +type AnyRecordId = RecordId<any, any, any>;
-+type OpaqueValue = Value | Date | ArrayBuffer | ArrayBufferView | Map<unknown, unknown> | Set<unknown> | ((...args: never[]) => unknown);
++type OpaqueValue = Value | Date | ArrayBuffer | ArrayBufferView | Map<unknown, unknown> | ((...args: never[]) => unknown);
 +/** `T` with every `RecordId`, at any depth, replaced by its string form. */
-+type StringRecordIds<T> = T extends AnyRecordId ? string : T extends OpaqueValue ? T : T extends readonly (infer Item)[] ? StringRecordIds<Item>[] : T extends object ? { [K in keyof T]: StringRecordIds<T[K]>; } : T;
++type StringRecordIds<T> = T extends AnyRecordId ? string : T extends OpaqueValue ? T : T extends ReadonlySet<infer Item> ? Set<StringRecordIds<Item>> : T extends readonly (infer Item)[] ? StringRecordIds<Item>[] : T extends object ? { [K in keyof T]: StringRecordIds<T[K]>; } : T;
 +type Decrement = [never, 0, 1, 2, 3, 4];
-+type RecordPathsOf<V, Path extends string, Depth extends number> = [Depth] extends [never] ? never : V extends AnyRecordId ? Path : V extends OpaqueValue ? never : V extends readonly (infer Item)[] ? RecordPathsOf<Item, Path, Depth> : V extends object ? { [K in keyof V & string]-?: RecordPathsOf<V[K], `${Path}.${K}`, Decrement[Depth]>; }[keyof V & string] : never;
++type RecordPathsOf<V, Path extends string, Depth extends number> = [Depth] extends [never] ? never : V extends AnyRecordId ? Path : V extends OpaqueValue ? never : V extends ReadonlySet<infer Item> ? RecordPathsOf<Item, Path, Depth> : V extends readonly (infer Item)[] ? RecordPathsOf<Item, Path, Depth> : V extends object ? { [K in keyof V & string]-?: RecordPathsOf<V[K], `${Path}.${K}`, Decrement[Depth]>; }[keyof V & string] : never;
 +/**
 + * Dot paths of the record-link fields of `T`, down to five levels. `id`, `in`
 + * and `out` are left out because the adapter handles them itself.
 + */
-+type RecordFieldPath<T> = { [K in Exclude<keyof T & string, 'id' | 'in' | 'out'>]-?: RecordPathsOf<T[K], K, 4>; }[Exclude<keyof T & string, 'id' | 'in' | 'out'>];
++type RecordFieldPath<T> = T extends unknown ? { [K in Exclude<keyof T & string, 'id' | 'in' | 'out'>]-?: RecordPathsOf<T[K], K, 4>; }[Exclude<keyof T & string, 'id' | 'in' | 'out'>] : never;
 +/** Requires SurrealKit's `tables` when `T` has record-link fields. */
 +type RequiredSchemaTables<T> = [RecordFieldPath<T>] extends [never] ? {
 +  tables?: readonly SurrealSchemaTable[];
@@ -1784,7 +1870,7 @@ index f239d858e8d8d88ac67aeb3681cf563940ac4124..59cbc6aa2099a89b572726f21160660b
 +export type { SurrealSchemaTable };
 \ No newline at end of file
 diff --git a/dist/index.mjs b/dist/index.mjs
-index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f56782972 100644
+index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..de44661d43d6c3605334522a28eb6d5247bfe4a3 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
 @@ -1,9 +1,8 @@
@@ -1800,7 +1886,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  // src/crdt.ts
  const toRecord = (value) => typeof value === "object" && value !== null ? value : {};
  const materializeLoroJson = (doc, id) => {
-@@ -249,11 +248,97 @@ const toRecordId = (tableName, id) => {
+@@ -249,11 +248,117 @@ const toRecordId = (tableName, id) => {
  	const key = normalized.startsWith(prefixed) ? normalized.slice(prefixed.length) : normalized;
  	return new RecordId(tableName, key);
  };
@@ -1868,6 +1954,14 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 +	return value;
 +};
 +const convertPath = (value, path, convert) => {
++	if (path[0] === "*") {
++		const rest = path.slice(1);
++		const convertItem = (item) => convertPath(item, rest, convert);
++		if (Array.isArray(value)) return value.map(convertItem);
++		if (value instanceof Set) return new Set([...value].map(convertItem));
++		if (!isPlainObject(value)) return value;
++		return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, convertItem(item)]));
++	}
 +	if (Array.isArray(value) && path.length > 0) return value.map((item) => convertPath(item, path, convert));
 +	if (value instanceof Set && path.length > 0) return new Set([...value].map((item) => convertPath(item, path, convert)));
 +	if (path.length === 0) return convert(value);
@@ -1878,6 +1972,18 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 +		...value,
 +		[head]: convertPath(value[head], rest, convert)
 +	};
++};
++const matchesFieldPattern = (pattern, path) => {
++	if (pattern.length === 0) return path.length === 0;
++	const [head, ...rest] = pattern;
++	if (head === "*") return matchesFieldPattern(rest, path) || path.length > 0 && matchesFieldPattern(rest, path.slice(1));
++	return path.length > 0 && String(path[0]) === head && matchesFieldPattern(rest, path.slice(1));
++};
++/** Whether a queried path is a record-link field, honoring `*` segments. */
++const isRecordFieldPath = (fields, path) => {
++	if (fields.has(path.join("."))) return true;
++	for (const field of fields) if (field.includes("*") && matchesFieldPattern(field.split("."), path)) return true;
++	return false;
 +};
 +/**
 +* Converts the configured record-link fields (dot paths) of a row from
@@ -1898,7 +2004,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  	const canonical = asCanonicalRecordIdString(key);
  	if (!canonical) return key;
  	return state.has(canonical) ? canonical : key;
-@@ -339,53 +424,250 @@ const stripEnvelopeFields = (value) => {
+@@ -339,53 +444,280 @@ const stripEnvelopeFields = (value) => {
  	for (const key of ENVELOPE_FIELDS) delete copy[key];
  	return copy;
  };
@@ -1976,18 +2082,33 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 +	if (typeof value === "object" && value !== null && "sql" in value && typeof value.sql === "string") return value;
 +	throw new Error("Unsupported where expression node.");
 +};
-+const joinLogical = (op, args) => {
-+	const parts = args.map(toSqlFragment).map((frag) => frag.sql);
-+	if (parts.length === 0) return { sql: op === "AND" ? "true" : "false" };
-+	if (parts.length === 1) return { sql: parts[0] };
-+	return { sql: parts.map((part) => `(${part})`).join(` ${op} `) };
++const joinSql = (op, parts) => {
++	if (parts.length === 0) return op === "AND" ? "true" : "false";
++	if (parts.length === 1) return parts[0];
++	return parts.map((part) => `(${part})`).join(` ${op} `);
 +};
++const sqlFragment = (sql, narrow) => sql === narrow ? { sql } : {
++	sql,
++	narrow
++};
++const joinLogical = (op, args) => {
++	const fragments = args.map(toSqlFragment);
++	return sqlFragment(joinSql(op, fragments.map((frag) => frag.sql)), joinSql(op, fragments.map((frag) => frag.narrow ?? frag.sql)));
++};
++const negate = (arg) => {
++	const frag = toSqlFragment(arg);
++	return sqlFragment(`NOT (${frag.narrow ?? frag.sql})`, `NOT (${frag.sql})`);
++};
++const LOCAL_ONLY = {
++	sql: "true",
++	narrow: "false"
++};
++const isStringRecordField = (table, options, fieldPath) => options.recordFields !== void 0 && isRecordFieldPath(options.recordFields, mapRelationPath(toFieldPath(fieldPath), table.relation));
 +const filterValueFor = (table, options, fieldPath, value) => {
 +	if (!options.recordFields) return normalizeFilterValue(value);
-+	const path = mapRelationPath(toFieldPath(fieldPath), table.relation);
-+	return options.recordFields.has(path.join(".")) ? toSurrealRecordId(value) : value;
++	return isStringRecordField(table, options, fieldPath) ? toSurrealRecordId(value) : value;
 +};
-+const whereSqlFrom = (table, expr, bind, scope, options = {}) => {
++const whereFragmentFrom = (table, expr, bind, scope, options = {}) => {
 +	const filterValue = (fieldPath, value) => filterValueFor(table, options, fieldPath, value);
 +	const fieldSql = (fieldPath) => {
 +		const field = formatFieldPath(mapRelationPath(toFieldPath(fieldPath), table.relation));
@@ -2001,13 +2122,16 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 +			throw new Error(`Cannot compare field '${field}' with undefined using '${op}'.`);
 +		}
 +		if (isReferencePathCandidate(value)) throw new Error("Got a field reference on the right side of a where comparison. Pass a concrete value.");
++		if (op !== "=" && op !== "!=") {
++			if (isStringRecordField(table, options, fieldPath)) return LOCAL_ONLY;
++		}
 +		return { sql: `${field} ${op} ${bind(filterValue(fieldPath, value))}` };
 +	};
-+	const fragment = parseWhereExpression(expr, {
++	return parseWhereExpression(expr, {
 +		handlers: {
 +			and: (...args) => joinLogical("AND", args),
 +			or: (...args) => joinLogical("OR", args),
-+			not: (arg) => ({ sql: `NOT (${toSqlFragment(arg).sql})` }),
++			not: negate,
 +			eq: (field, value) => comparison(field, "=", value),
 +			gt: (field, value) => comparison(field, ">", value),
 +			gte: (field, value) => comparison(field, ">=", value),
@@ -2015,6 +2139,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 +			lte: (field, value) => comparison(field, "<=", value),
 +			like: (field, value) => comparison(field, "LIKE", value),
 +			ilike: (field, value) => {
++				if (isStringRecordField(table, options, field)) return LOCAL_ONLY;
 +				return { sql: `string::lower(${fieldSql(field)}) LIKE string::lower(${bind(filterValue(field, value))})` };
 +			},
 +			in: (field, value) => {
@@ -2030,12 +2155,20 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 +		onUnknownOperator: (op) => {
 +			throw new Error(`Unsupported where operator '${op}' for SurrealQL translation.`);
 +		}
-+	});
-+	if (!fragment) return "";
-+	return fragment.sql;
++	}) ?? void 0;
 +};
++const whereSqlFrom = (table, expr, bind, scope, options = {}) => whereFragmentFrom(table, expr, bind, scope, options)?.sql ?? "";
 +const subsetFilters = (subset) => [subset?.where, subset?.cursor?.whereFrom].filter((expr) => Boolean(expr));
 +const filterSqlFrom = (table, subset, bind, scope, options = {}) => subsetFilters(subset).map((expr) => whereSqlFrom(table, expr, bind, scope, options)).filter(Boolean);
++/**
++* Whether LIMIT and START can run on the server. A filter or order the server
++* can't evaluate like TanStack DB would pick a different window, so those
++* subsets fetch every candidate row and TanStack DB applies the window.
++*/
++const pushesSubsetWindow = (table, subset, options = {}) => {
++	if (!options.recordFields) return true;
++	return subsetFilters(subset).every((expr) => whereFragmentFrom(table, expr, () => "$_", void 0, options)?.narrow === void 0) && !parseOrderByExpression(subset?.orderBy).some((clause) => isStringRecordField(table, options, clause.field));
++};
 +const isOrdered = (subset) => Boolean(subset?.orderBy?.length) || typeof subset?.limit === "number" || typeof subset?.offset === "number";
 +const subsetOrderOf = (table, subset) => {
 +	if (!isOrdered(subset)) return [];
@@ -2057,7 +2190,8 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 +	}
 +	return value;
 +};
-+const windowBoundaryOf = (table, subset, rows) => {
++const windowBoundaryOf = (table, subset, rows, options = {}) => {
++	if (!pushesSubsetWindow(table, subset, options)) return void 0;
 +	const limit = subset?.limit;
 +	if (typeof limit !== "number" || rows.length === 0) return void 0;
 +	if (rows.length < limit) return void 0;
@@ -2086,8 +2220,10 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 +	const whereParts = filterSqlFrom(table, subset, nextParam, void 0, options);
 +	const whereSql = whereParts.length ? ` WHERE ${whereParts.map((part) => `(${part})`).join(" AND ")}` : "";
 +	const order = subsetOrderOf(table, subset);
++	const orderSql = order.length ? ` ORDER BY ${order.map((clause) => `${formatFieldPath(clause.field)} ${clause.direction.toUpperCase()}`).join(", ")}` : "";
++	const windowed = pushesSubsetWindow(table, subset, options);
 +	return {
-+		sql: `SELECT * FROM type::table($table)${whereSql}${order.length ? ` ORDER BY ${order.map((clause) => `${formatFieldPath(clause.field)} ${clause.direction.toUpperCase()}`).join(", ")}` : ""}${typeof subset?.limit === "number" ? ` LIMIT ${nextParam(subset.limit)}` : ""}${typeof subset?.offset === "number" ? ` START ${nextParam(subset.offset)}` : ""};`,
++		sql: `SELECT * FROM type::table($table)${whereSql}${orderSql}${windowed && typeof subset?.limit === "number" ? ` LIMIT ${nextParam(subset.limit)}` : ""}${windowed && typeof subset?.offset === "number" ? ` START ${nextParam(subset.offset)}` : ""};`,
 +		params
 +	};
 +};
@@ -2186,7 +2322,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  		if (value instanceof Date) return value.toISOString();
  		if (value instanceof RecordId) return toRecordIdString(value);
  		if (typeof value === "bigint") return value.toString();
-@@ -399,9 +681,9 @@ const subsetCacheKey = (subset) => {
+@@ -399,9 +731,9 @@ const subsetCacheKey = (subset) => {
  		return value;
  	}) ?? "";
  };
@@ -2198,7 +2334,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  		return preferredByCanonical;
  	}
  	if (!value || typeof value !== "object") return preferredByCanonical;
-@@ -410,18 +692,19 @@ const normalizeSubsetValuesInPlace = (value, seen = /* @__PURE__ */ new WeakSet(
+@@ -410,18 +742,19 @@ const normalizeSubsetValuesInPlace = (value, seen = /* @__PURE__ */ new WeakSet(
  	const obj = value;
  	if (obj.type === "val" && "value" in obj) {
  		const canonical = asCanonicalRecordIdString(obj.value);
@@ -2225,7 +2361,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  };
  const rebindRecordIdIdentityDeep = (value, preferredByCanonical) => {
  	const canonical = asCanonicalRecordIdString(value);
-@@ -497,6 +780,279 @@ const applyPreferredRecordIdIdentityToCollection = (ctx, preferredByCanonical) =
+@@ -497,6 +830,280 @@ const applyPreferredRecordIdIdentityToCollection = (ctx, preferredByCanonical) =
  	const indexes = collectionWithInternals._indexes?.indexes;
  	if (entries && indexes) for (const index of indexes.values()) index.build?.(entries);
  };
@@ -2329,8 +2465,9 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 +		return live;
 +	};
 +	const missingFromSnapshot = (entry, rows) => {
-+		const { limit, offset } = entry.options;
-+		if (offset || signedOut) return [];
++		const windowed = pushesSubsetWindow(table, entry.options, config.queryOptions);
++		const limit = windowed ? entry.options.limit : void 0;
++		if ((windowed ? entry.options.offset : void 0) || signedOut) return [];
 +		const isFullWindow = typeof limit === "number" && rows.length >= limit;
 +		const leading = subsetOrderOf(table, entry.options)[0];
 +		const last = rows[rows.length - 1];
@@ -2371,7 +2508,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 +			const rows = await loadRows(entry.options);
 +			if (stale()) return release(opened.splice(0));
 +			await enqueue(entry, () => applySnapshot(entry, rows, stale));
-+			const boundary = windowBoundaryOf(table, entry.options, rows);
++			const boundary = windowBoundaryOf(table, entry.options, rows, config.queryOptions);
 +			if (live && boundary) {
 +				const bounded = await openLive(entry, buildLiveCondition(table, entry.options, boundary, config.queryOptions));
 +				if (bounded) {
@@ -2505,7 +2642,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  // src/internal/subset-tracker.ts
  var ActiveSubsetTracker = class {
  	subsetIds = /* @__PURE__ */ new Map();
-@@ -507,10 +1063,24 @@ var ActiveSubsetTracker = class {
+@@ -507,10 +1114,24 @@ var ActiveSubsetTracker = class {
  	has(id) {
  		return this.activeIds.has(id);
  	}
@@ -2530,7 +2667,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  	delete(key) {
  		this.subsetIds.delete(key);
  		this.rebuildActiveIds();
-@@ -541,184 +1111,47 @@ const toTableResource = (table) => {
+@@ -541,184 +1162,51 @@ const toTableResource = (table) => {
  	return new Table(normalized.name);
  };
  const tableNameOf = (table) => toTableOptions(table).name;
@@ -2554,24 +2691,24 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 -		const next = quoteIdentifier(segment);
 -		out = out ? `${out}.${next}` : next;
 +// src/schema.ts
-+const holdsText = (kind) => kind.kind === "string" || kind.kind === "union" && (kind.variants ?? []).some(holdsText);
-+const holdsRecord = (kind) => kind.kind === "record" || kind.kind === "union" && (kind.variants ?? []).some(holdsRecord);
-+const collectRecordPaths = (kind, path, out, table) => {
++const collectTerminalPaths = (kind, path, out) => {
 +	if (!kind) return;
 +	switch (kind.kind) {
 +		case "record":
-+			out.add(path.join("."));
++			out.records.add(path.join("."));
++			return;
++		case "string":
++			out.texts.add(path.join("."));
 +			return;
 +		case "union":
-+			if (holdsRecord(kind) && holdsText(kind)) throw new Error(`${table}.${path.join(".")} can hold both a record and a string, which string record ids cannot tell apart.`);
-+			for (const variant of kind.variants ?? []) collectRecordPaths(variant, path, out, table);
++			for (const variant of kind.variants ?? []) collectTerminalPaths(variant, path, out);
 +			return;
 +		case "array":
 +		case "set":
-+			collectRecordPaths(kind.item, path, out, table);
++			collectTerminalPaths(kind.item, path, out);
 +			return;
 +		case "objectLiteral":
-+			for (const field of kind.fields ?? []) collectRecordPaths(field.kind, [...path, field.name], out, table);
++			for (const field of kind.fields ?? []) collectTerminalPaths(field.kind, [...path, field.name], out);
 +			return;
  	}
 -	return out;
@@ -2582,7 +2719,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 -	if (path[0] === "from") return ["in", ...path.slice(1)];
 -	if (path[0] === "to") return ["out", ...path.slice(1)];
 -	return path;
- };
+-};
 -const normalizeFilterValue = (value) => {
 -	if (Array.isArray(value)) return value.map((item) => normalizeFilterValue(item));
 -	const native = toNativeRecordIdLikeValue(value);
@@ -2593,7 +2730,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 -const toSqlFragment = (value) => {
 -	if (typeof value === "object" && value !== null && "sql" in value && typeof value.sql === "string") return value;
 -	throw new Error("Unsupported where expression node.");
--};
+ };
 -const joinLogical = (op, args) => {
 -	const parts = args.map(toSqlFragment).map((frag) => frag.sql);
 -	if (parts.length === 0) return { sql: op === "AND" ? "true" : "false" };
@@ -2647,25 +2784,27 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 -		});
 -		if (!fragment) return "";
 -		return fragment.sql;
--	};
--	const whereParts = [];
--	if (subset?.where) {
--		const parsed = whereSqlFrom(subset.where);
--		if (parsed) whereParts.push(parsed);
 +/** Reads a table's relation flag and record-link fields from SurrealKit's `tables`. */
 +function schemaTableOptions(tables, name) {
 +	const table = tables.find((candidate) => candidate.name === name);
 +	if (!table) throw new Error(`Table "${name}" is not in the provided schema tables.`);
 +	const relation = table.type?.kind === "relation";
-+	const paths = /* @__PURE__ */ new Set();
++	const terminals = {
++		records: /* @__PURE__ */ new Set(),
++		texts: /* @__PURE__ */ new Set()
+ 	};
+-	const whereParts = [];
+-	if (subset?.where) {
+-		const parsed = whereSqlFrom(subset.where);
+-		if (parsed) whereParts.push(parsed);
 +	for (const field of table.fields ?? []) {
 +		if (!Array.isArray(field.path)) throw new Error("Expected tables from a version 2 schema document (surrealkit compile).");
-+		const path = field.path.filter((part) => part !== "*");
-+		collectRecordPaths(field.kind, path, paths, table.name);
++		collectTerminalPaths(field.kind, field.path, terminals);
  	}
 -	if (subset?.cursor?.whereFrom) {
 -		const cursorWhere = whereSqlFrom(subset.cursor.whereFrom);
 -		if (cursorWhere) whereParts.push(cursorWhere);
++	const paths = terminals.records;
 +	paths.delete("id");
 +	if (relation) {
 +		paths.delete("in");
@@ -2673,6 +2812,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  	}
 -	const whereSql = whereParts.length ? ` WHERE ${whereParts.map((part) => `(${part})`).join(" AND ")}` : "";
 -	const order = parseOrderByExpression(subset?.orderBy);
++	for (const path of paths) if (terminals.texts.has(path)) throw new Error(`${table.name}.${path} can hold both a record and a string, which string record ids cannot tell apart.`);
  	return {
 -		sql: `SELECT * FROM type::table($table)${whereSql}${order.length ? ` ORDER BY ${order.map((clause) => `${formatFieldPath(mapRelationPath(clause.field, table.relation))} ${clause.direction.toUpperCase()}`).join(", ")}` : ""}${typeof subset?.limit === "number" ? ` LIMIT ${nextParam(subset.limit)}` : ""}${typeof subset?.offset === "number" ? ` START ${nextParam(subset.offset)}` : ""};`,
 -		params
@@ -2751,7 +2891,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  	};
  }
  // src/encryption/index.ts
-@@ -784,17 +1217,49 @@ var WebCryptoAESGCM = class WebCryptoAESGCM {
+@@ -784,17 +1272,49 @@ var WebCryptoAESGCM = class WebCryptoAESGCM {
  };
  // src/index.ts
  const NOOP = () => {};
@@ -2804,7 +2944,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  	const collectionId = config.id ?? deriveCollectionId(tableName, queryKey);
  	const tableResource = toTableResource(table);
  	const activeSubsets = new ActiveSubsetTracker();
-@@ -813,12 +1278,24 @@ function modernSurrealCollectionOptions(config) {
+@@ -813,12 +1333,24 @@ function modernSurrealCollectionOptions(config) {
  		if (!crdtApplyLocalChange) throw missingCrdtHandlers();
  		crdtApplyLocalChange(...args);
  	};
@@ -2831,7 +2971,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  		const normalized = normalizeRecordIdLikeValueDeep(row);
  		return {
  			...normalized,
-@@ -841,7 +1318,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -841,7 +1373,7 @@ function modernSurrealCollectionOptions(config) {
  		const merged = {
  			...stripEnvelopeFields(row),
  			...payload,
@@ -2840,7 +2980,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  		};
  		return normalizeRow(merged);
  	};
-@@ -860,9 +1337,12 @@ function modernSurrealCollectionOptions(config) {
+@@ -860,15 +1392,20 @@ function modernSurrealCollectionOptions(config) {
  	const updatesTableName = crdtEnabled ? tableNameOf(crdt.updatesTable) : void 0;
  	const updatesTable = crdtEnabled ? toTableResource(crdt.updatesTable) : void 0;
  	const snapshotsTableName = crdtEnabled && crdt.snapshotsTable ? tableNameOf(crdt.snapshotsTable) : void 0;
@@ -2854,7 +2994,35 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  		const doc = new LoroDoc();
  		docs.set(id, doc);
  		return doc;
-@@ -936,14 +1416,14 @@ function modernSurrealCollectionOptions(config) {
+ 	};
+-	const docRef = (id) => new RecordId(tableName, id);
+-	const idFromDocRef = (doc) => toRecordKeyString(doc);
++	const docKeyOf = (id) => stringIds ? toIdString(id) : toRecordKeyString(id);
++	const docRef = (id) => stringIds ? toSurrealRecordId(id) : new RecordId(tableName, id);
++	const idFromDocRef = (doc) => docKeyOf(doc);
++	const aadKeyOf = (id) => stringIds ? toRecordKeyString(id) : id;
+ 	const resolveActor = (id, change) => {
+ 		if (!crdtEnabled) return void 0;
+ 		const candidate = crdt.actor ?? crdt.localActorId;
+@@ -891,7 +1428,7 @@ function modernSurrealCollectionOptions(config) {
+ 		}
+ 		const envelope = toEnvelope(row);
+ 		if (!envelope) return /* @__PURE__ */ new Uint8Array();
+-		const id = idFromDocRef(row.doc);
++		const id = aadKeyOf(idFromDocRef(row.doc));
+ 		return e2ee.crypto.decrypt({
+ 			envelope,
+ 			aad: aadFor({
+@@ -913,7 +1450,7 @@ function modernSurrealCollectionOptions(config) {
+ 			aad: aadFor({
+ 				table: targetTable ?? tableName,
+ 				baseTable: tableName,
+-				id,
++				id: aadKeyOf(id),
+ 				kind
+ 			})
+ 		});
+@@ -936,14 +1473,14 @@ function modernSurrealCollectionOptions(config) {
  		const id = toRecordKeyString(materialized.id);
  		if (!e2eeEnabled) {
  			const { id: _ignoredId, ...rest } = materialized;
@@ -2873,7 +3041,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  	};
  	const hydratePlainRows = async (rows, write, begin, commit, type = "insert") => {
  		if (!rows.length) return;
-@@ -959,7 +1439,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -959,7 +1496,7 @@ function modernSurrealCollectionOptions(config) {
  	};
  	const hydrateCrdtDoc = async (id, write, begin, commit, writeType = "insert") => {
  		if (!crdtEnabled || !updatesTableName) return;
@@ -2882,7 +3050,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  		let since;
  		if (snapshotsTableName) {
  			const snapshot = (await queryRows(db, `SELECT * FROM type::table($table) WHERE doc = $doc ORDER BY ts DESC LIMIT 1;`, {
-@@ -1008,17 +1488,13 @@ function modernSurrealCollectionOptions(config) {
+@@ -1008,17 +1545,13 @@ function modernSurrealCollectionOptions(config) {
  			live.subscribe(async (message) => {
  				if (message.action === "KILLED") return;
  				const row = message.value;
@@ -2902,7 +3070,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  						});
  					} finally {
  						ctx.commit();
-@@ -1057,7 +1533,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1057,7 +1590,7 @@ function modernSurrealCollectionOptions(config) {
  				const id = idFromDocRef(value.doc);
  				if (value.actor && value.actor === resolveActor(id)) return;
  				if (isStrictOnDemand && !activeSubsets.has(id)) return;
@@ -2911,7 +3079,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  				const bytes = await decodeUpdateBytes(value, "update");
  				if (!bytes.byteLength) return;
  				doc.import(bytes);
-@@ -1077,9 +1553,60 @@ function modernSurrealCollectionOptions(config) {
+@@ -1077,12 +1610,63 @@ function modernSurrealCollectionOptions(config) {
  				cleanupUpdateLive = NOOP;
  			};
  		};
@@ -2973,8 +3141,12 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 +			}
  			const key = subsetCacheKey(subset);
  			const rows = await tableAccess.loadSubset(subset);
- 			const ids = new Set(rows.map((row) => toRecordKeyString(row.id)));
-@@ -1103,7 +1630,11 @@ function modernSurrealCollectionOptions(config) {
+-			const ids = new Set(rows.map((row) => toRecordKeyString(row.id)));
++			const ids = new Set(rows.map((row) => docKeyOf(row.id)));
+ 			activeSubsets.set(key, ids);
+ 			const upsertWrite = (change) => {
+ 				if (change.type === "insert" && typeof ctx.collection?.has === "function" && ctx.collection.has(getKey(change.value))) {
+@@ -1103,7 +1687,11 @@ function modernSurrealCollectionOptions(config) {
  			await ensureUpdateLive();
  		};
  		const unloadSubset = (subset) => {
@@ -2987,7 +3159,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  			const key = subsetCacheKey(subset);
  			activeSubsets.delete(key);
  			if (activeSubsets.size === 0) {
-@@ -1120,6 +1651,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1120,6 +1708,7 @@ function modernSurrealCollectionOptions(config) {
  		};
  		const cleanup = () => {
  			killed = true;
@@ -2995,7 +3167,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  			activeSubsets.clear();
  			cleanupBaseLive();
  			cleanupUpdateLive();
-@@ -1131,16 +1663,24 @@ function modernSurrealCollectionOptions(config) {
+@@ -1131,16 +1720,24 @@ function modernSurrealCollectionOptions(config) {
  			unloadSubset
  		};
  	};
@@ -3022,7 +3194,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  				if (!meta?.loadSubsetOptions) return [];
  				if (!crdtEnabled) {
  					const rows = await tableAccess.loadSubset(meta?.loadSubsetOptions);
-@@ -1159,10 +1699,10 @@ function modernSurrealCollectionOptions(config) {
+@@ -1159,10 +1756,10 @@ function modernSurrealCollectionOptions(config) {
  				const normalized = normalizeRow(mutation.modified);
  				if (!crdtEnabled) {
  					const idKey = toRecordKeyString(normalized.id);
@@ -3035,7 +3207,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  					const recordPayload = await encodeBaseRow(payload, idKey);
  					if (isTempId(normalized.id, tableName)) {
  						const created = await db.create(tableResource).content(recordPayload);
-@@ -1170,20 +1710,20 @@ function modernSurrealCollectionOptions(config) {
+@@ -1170,20 +1767,20 @@ function modernSurrealCollectionOptions(config) {
  						const createdId = createdRow && createdRow.id ? createdRow.id : normalized.id;
  						const resolved = {
  							...normalized,
@@ -3053,13 +3225,14 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  					writeUtils.writeUpsert?.(normalized);
  					continue;
  				}
- 				const id = toRecordKeyString(normalized.id);
+-				const id = toRecordKeyString(normalized.id);
 -				const doc = getDoc(id);
++				const id = docKeyOf(normalized.id);
 +				const doc = await getDoc(id);
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "insert",
-@@ -1204,36 +1744,48 @@ function modernSurrealCollectionOptions(config) {
+@@ -1204,36 +1801,48 @@ function modernSurrealCollectionOptions(config) {
  			const writeUtils = getWriteUtils(params.collection.utils);
  			for (const mutation of params.transaction.mutations) {
  				if (mutation.type !== "update") continue;
@@ -3115,12 +3288,12 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  				}
 -				const id = toRecordKeyString(mutationId);
 -				const doc = getDoc(id);
-+				const id = toRecordKeyString(rowId);
++				const id = docKeyOf(rowId);
 +				const doc = await getDoc(id);
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "update",
-@@ -1254,18 +1806,20 @@ function modernSurrealCollectionOptions(config) {
+@@ -1254,18 +1863,20 @@ function modernSurrealCollectionOptions(config) {
  			const writeUtils = getWriteUtils(params.collection.utils);
  			for (const mutation of params.transaction.mutations) {
  				if (mutation.type !== "delete") continue;
@@ -3129,7 +3302,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
 +				const mutationKey = mutation.key;
 +				const mutationId = toSurrealId(mutationKey);
 +				const rowId = toRowId(mutationKey);
-+				const id = toRecordKeyString(rowId);
++				const id = docKeyOf(rowId);
  				if (!crdtEnabled) {
  					await db.delete(mutationId);
 -					writeUtils.writeDelete?.(`${tableName}:${id}`);
@@ -3146,7 +3319,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  				};
  				applyCrdtLocalChange(doc, localChange);
  				const bytes = doc.export({
-@@ -1273,7 +1827,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1273,7 +1884,7 @@ function modernSurrealCollectionOptions(config) {
  					from: vv
  				});
  				await persistCrdtUpdate(id, bytes, localChange);
@@ -3155,7 +3328,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  			}
  		})
  	});
-@@ -1296,7 +1850,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1296,7 +1907,7 @@ function modernSurrealCollectionOptions(config) {
  					const updates = await queryRows(db, `SELECT * FROM type::table($table) ORDER BY ts ASC;`, { table: updatesTableName });
  					for (const update of updates) {
  						const id = idFromDocRef(update.doc);
@@ -3164,7 +3337,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b0137efcc5af118d1544bc9dabdc037f
  						const bytes = await decodeUpdateBytes(update, "update");
  						if (!bytes.byteLength) continue;
  						doc.import(bytes);
-@@ -1340,15 +1894,35 @@ function modernSurrealCollectionOptions(config) {
+@@ -1340,15 +1951,35 @@ function modernSurrealCollectionOptions(config) {
  function surrealCollectionOptions(config) {
  	return modernSurrealCollectionOptions(config);
  }
