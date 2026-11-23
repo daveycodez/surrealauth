@@ -1,4 +1,4 @@
-You are authorized to sign in as test@example.com on localhost:3000 with password test.
+You are authorized to sign in as test@example.com on localhost:\* with password test.
 
 
 <!-- nx configuration start-->
@@ -38,3 +38,5 @@ You are authorized to sign in as test@example.com on localhost:3000 with passwor
 # Loading states
 
 * Server renders are signed out (the auth id comes from the cookie on the client), so any UI that shows a skeleton or loading state for user or synced data must also show it before hydration: `(!useHydrated() || isLoading) && !data`. Hooks like `useUser` don't check hydration themselves. Cached data still shows straight away, hence `&& !data`.
+
+
