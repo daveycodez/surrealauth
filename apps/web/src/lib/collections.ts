@@ -1,5 +1,5 @@
-import { persistedCollectionOptions } from "@tanstack/browser-db-sqlite-persistence"
 import { surrealCollectionOptions } from "@surrealdb/tanstack-db"
+import { persistedCollectionOptions } from "@tanstack/browser-db-sqlite-persistence"
 import { collectionOptions } from "@tanstack/react-db"
 import { QueryClient } from "@tanstack/react-query"
 import { createIsomorphicFn } from "@tanstack/react-start"

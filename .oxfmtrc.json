@@ -3,5 +3,10 @@
   "semi": false,
   "trailingComma": "none",
   "sortImports": true,
-  "ignorePatterns": ["pnpm-lock.yaml", "packages/core/src/lib/cookie.ts"]
+  "ignorePatterns": [
+    "AGENTS.md",
+    "apps/web/src/types/schema.json",
+    "pnpm-lock.yaml",
+    "packages/core/src/lib/cookie.ts"
+  ]
 }
