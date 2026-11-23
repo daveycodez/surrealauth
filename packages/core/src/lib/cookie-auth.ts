@@ -20,12 +20,14 @@ export type Credential = string | Parameters<Surreal["signin"]>[0]
 // For connect()'s authentication option: hands over the credential once, on the first connect.
 // Reconnects restore the session the SDK already holds, and the SDK's renewal of an expiring token
 // then gets nothing, so it signs out and setupCookieAuth renews with the refresh token.
-export function connectAuthentication(credential: Credential | null) {
+export function connectAuthentication(
+  credential: Credential | null | (() => Promise<Credential | null>)
+) {
   let used = false
   return () => {
     if (used) return null
     used = true
-    return credential
+    return typeof credential === "function" ? credential() : credential
   }
 }
 
@@ -66,6 +68,21 @@ function withRenewalLock(name: string, task: () => Promise<void>) {
     Promise.race([task(), new Promise<void>((resolve) => setTimeout(resolve, RENEWAL_TIMEOUT_MS))])
   if (typeof navigator === "undefined" || !navigator.locks) return guarded()
   return navigator.locks.request(`surrealauth:renew:${name}`, guarded)
+}
+
+// Holds the lock across a connect, so a tab loading alongside another reuses its rotated tokens.
+export function holdRenewalLock(name: string) {
+  let release = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const acquired = new Promise<void>((resolve) => {
+    void withRenewalLock(name, () => {
+      resolve()
+      return held
+    })
+  })
+  return { acquired, release }
 }
 
 function renewalDelayMs(token: string) {

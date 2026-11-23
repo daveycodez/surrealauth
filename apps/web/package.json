@@ -50,6 +50,9 @@
         "outputs": [
           "{projectRoot}/dist"
         ]
+      },
+      "e2e": {
+        "cache": false
       }
     }
   }

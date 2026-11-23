@@ -1,5 +1,5 @@
 import { Button, Card, Form, Input, Label, TextField } from "@heroui/react"
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
+import { createFileRoute, Link, useHydrated, useNavigate } from "@tanstack/react-router"
 import { type FormEvent, useState } from "react"
 
 import { AuthError, errorMessage } from "../components/auth-result"
@@ -11,6 +11,7 @@ export const Route = createFileRoute("/sign-up")({
 
 function SignUp() {
   const navigate = useNavigate()
+  const hydrated = useHydrated()
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState(false)
 
@@ -41,7 +42,7 @@ function SignUp() {
           </Card.Description>
         </Card.Header>
         <Card.Content className="flex flex-col gap-4">
-          <Form className="flex flex-col gap-4" onSubmit={onSubmit}>
+          <Form className="flex flex-col gap-4" method="post" onSubmit={onSubmit}>
             <TextField isRequired variant="secondary" name="email" type="email">
               <Label>Email</Label>
               <Input placeholder="john.doe@example.com" />
@@ -50,7 +51,8 @@ function SignUp() {
               <Label>Password</Label>
               <Input />
             </TextField>
-            <Button isPending={pending} type="submit">
+            {/* Before hydration a native submit would send the password. */}
+            <Button isDisabled={!hydrated} isPending={pending} type="submit">
               Sign up
             </Button>
           </Form>

@@ -18,6 +18,7 @@ import {
 import {
   type Credential,
   connectAuthentication,
+  holdRenewalLock,
   rotatedTokens,
   savedCredentials,
   setupCookieAuth
@@ -73,13 +74,21 @@ export function createSurrealAuth(config: SurrealAuthConfig) {
   }
 
   async function connectWith(credential: Credential | null) {
+    const lock = credential && typeof credential === "object" ? holdRenewalLock(cookie.name) : null
     const connecting = db.connect(endpoint, {
       ...options,
       namespace,
       database,
       // setupCookieAuth renews first, since the SDK's refresh fails on a reconnected socket.
       expiryMargin: 1,
-      authentication: connectAuthentication(credential)
+      authentication: connectAuthentication(
+        lock
+          ? async () => {
+              await lock.acquired
+              return savedCredentials({ namespace, database, access, cookie })[0] ?? null
+            }
+          : credential
+      )
     })
     if (!credential) return connecting
 
@@ -101,6 +110,7 @@ export function createSurrealAuth(config: SurrealAuthConfig) {
       throw error
     } finally {
       unsubscribe()
+      lock?.release()
     }
   }
 
