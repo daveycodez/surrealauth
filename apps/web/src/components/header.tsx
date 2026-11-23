@@ -3,8 +3,10 @@ import { buttonVariants } from "@heroui/styles"
 import { Link, useHydrated, useNavigate } from "@tanstack/react-router"
 
 import { useUser } from "../hooks/use-user"
-import { logout } from "../lib/surreal"
+import { surreal } from "../lib/surreal"
 import type { User } from "../types/schema.generated"
+
+type AccountUser = Pick<User, "email" | "name">
 
 export function Header() {
   return (
@@ -52,7 +54,7 @@ function AccountArea() {
   return <AccountMenu user={user} />
 }
 
-function initials(user: User) {
+function initials(user: AccountUser) {
   if (!user.name) return user.email[0]?.toUpperCase() ?? "?"
 
   return (
@@ -65,14 +67,14 @@ function initials(user: User) {
   )
 }
 
-function AccountMenu({ user }: { user: User }) {
+function AccountMenu({ user }: { user: AccountUser }) {
   const navigate = useNavigate()
 
   async function onAction(key: React.Key) {
     if (key === "todos") {
       await navigate({ to: "/todos" })
     } else if (key === "sign-out") {
-      await logout()
+      await surreal.logout()
       await navigate({ to: "/" })
     }
   }

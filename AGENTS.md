@@ -31,6 +31,7 @@ You are authorized to sign in as test@example.com on localhost:3000 with passwor
 * Use camelCase for table, field, index, param and access names in `apps/<app>/database/schema/*.surql` (e.g. `updatedAt`, `todoItem`), so SurrealKit-generated TypeScript types match our code with no case conversion. Never add a snake_case/camelCase mapping layer.
 * Table names are singular camelCase (e.g. `user`, `todo`, `orgMember`), matching SurrealDB's examples, so SurrealKit's generated interfaces get the natural type names (`user` → `User`).
 * Schema is applied with SurrealKit via the app's `db:sync` target (e.g. `pnpm nx run @surrealauth/web:db:sync`), not ad-hoc queries. It loads the app's `.env` and passes `JWT_SECRET` as the `${JWT_SECRET}` template variable (SurrealKit only reads connection settings from `.env` itself, so a bare `surrealkit sync` fails on the missing variable).
+* TanStack DB collections use `recordIds: "string"`, so record ids in rows are plain strings like `user:abc`. Pass `tables` from SurrealKit's `src/types/schema.json`, which `db:sync` regenerates. Use the named import `import { tables } from ".../schema.json"`, never the whole document, so access definitions stay out of the client bundle.
 
 
 

@@ -3,6 +3,15 @@
 
 import type { RecordId } from "surrealdb"
 
+export interface Todo {
+  id: RecordId<"todo">
+  completed: boolean
+  createdAt: Date
+  text: string
+  updatedAt: Date
+  userId: RecordId<"user">
+}
+
 export interface User {
   id: RecordId<"user">
   email: string

@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "deploy": "vite build && wrangler deploy",
     "cf-typegen": "wrangler types",
-    "db:sync": "set -a && . ./.env && set +a && surrealkit sync --var JWT_SECRET=\"$JWT_SECRET\""
+    "db:sync": "set -a && . ./.env && set +a && surrealkit sync --var JWT_SECRET=\"$JWT_SECRET\" && surrealkit compile --var JWT_SECRET=placeholder --out src/types/schema.json"
   },
   "dependencies": {
     "@heroui/react": "^3.2.7",
@@ -20,6 +20,7 @@
     "@surrealdb/tanstack-db": "1.0.0-alpha.1",
     "@tanstack/browser-db-sqlite-persistence": "1.0.0-rc.1.5",
     "@tanstack/db": "1.0.0-rc.1.5",
+    "@tanstack/offline-transactions": "^1.2.1",
     "@tanstack/query-db-collection": "^1.5.2",
     "@tanstack/react-db": "1.0.0-rc.1.5",
     "@tanstack/react-query": "^5.108.2",

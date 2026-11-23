@@ -1,0 +1,299 @@
+{
+  "version": 2,
+  "semanticDigest": "sha256:b9fa44974d4f3fe7fa80cae676f1a66676099a098701e4a03cb60671aa3942eb",
+  "provenance": {
+    "generator": {
+      "name": "surrealkit",
+      "version": "1.0.0-rc.1"
+    },
+    "engine": {
+      "version": "4.0.0",
+      "build": "surrealdb-4.0.0",
+      "mode": "embedded"
+    },
+    "adapter": "structure-4.0",
+    "source": {
+      "kind": "compile",
+      "modules": [
+        "default"
+      ],
+      "files": [
+        {
+          "path": "schema/access.surql",
+          "sha256": "f04affef708c5a44557e3a91d4728cd99a25724669042f75c690e6b9db208ffb"
+        },
+        {
+          "path": "schema/todo.surql",
+          "sha256": "59c2d34337642e6960396925d7574871055dbc1c9f7889cb2e915a87f005137f"
+        },
+        {
+          "path": "schema/user.surql",
+          "sha256": "b9a7bf43b146df9822cacfdab8194bd0114792f5d237b26b9f5e3250fe85ea49"
+        }
+      ]
+    },
+    "capabilities": {
+      "experimental": [],
+      "network": false
+    }
+  },
+  "tables": [
+    {
+      "name": "todo",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": "userId = $auth.id",
+        "create": "userId = $auth.id",
+        "update": "userId = $auth.id",
+        "delete": "userId = $auth.id"
+      },
+      "fields": [
+        {
+          "path": [
+            "completed"
+          ],
+          "kind": {
+            "kind": "bool"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "false"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD completed ON todo TYPE bool DEFAULT false PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "createdAt"
+          ],
+          "kind": {
+            "kind": "datetime"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": true,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "time::now()"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD createdAt ON todo TYPE datetime DEFAULT time::now() READONLY PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "text"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD text ON todo TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "updatedAt"
+          ],
+          "kind": {
+            "kind": "datetime"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "value": {
+            "expr": "time::now()",
+            "readsInput": false
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD updatedAt ON todo TYPE datetime VALUE time::now() PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "userId"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "user"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": true,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "$auth.id"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD userId ON todo TYPE record<user> DEFAULT $auth.id READONLY PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "todoUserId",
+          "columns": [
+            [
+              "userId"
+            ]
+          ],
+          "type": "standard",
+          "clause": ""
+        }
+      ],
+      "events": [],
+      "define": "DEFINE TABLE todo TYPE NORMAL SCHEMAFULL PERMISSIONS FOR select, create, update, delete WHERE userId = $auth.id"
+    },
+    {
+      "name": "user",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": "id = $auth.id",
+        "create": false,
+        "update": "id = $auth.id",
+        "delete": "id = $auth.id"
+      },
+      "fields": [
+        {
+          "path": [
+            "email"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "assert": {
+            "expr": "string::is_email($value)",
+            "recognized": [
+              {
+                "type": "email"
+              }
+            ]
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD email ON user TYPE string ASSERT string::is_email($value) PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "name"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD name ON user TYPE none | string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "password"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": false,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD password ON user TYPE string PERMISSIONS FOR select NONE, FOR create, update FULL"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uniqueEmail",
+          "columns": [
+            [
+              "email"
+            ]
+          ],
+          "type": "unique",
+          "clause": "UNIQUE"
+        }
+      ],
+      "events": [],
+      "define": "DEFINE TABLE user TYPE NORMAL SCHEMAFULL PERMISSIONS FOR select, update, delete WHERE id = $auth.id, FOR create NONE"
+    }
+  ],
+  "functions": [],
+  "params": [],
+  "accesses": [
+    {
+      "name": "account",
+      "method": "record",
+      "signup": "CREATE user SET email = $email, password = crypto::argon2::generate($pass)",
+      "signin": "SELECT * FROM user WHERE email = $email AND crypto::argon2::compare(password, $pass)",
+      "refresh": true,
+      "verify": {
+        "alg": "HS512"
+      },
+      "durations": {
+        "grant": "4w2d",
+        "token": "15m"
+      }
+    }
+  ],
+  "analyzers": [],
+  "sequences": [],
+  "buckets": [],
+  "apis": [],
+  "modules": [],
+  "configs": [],
+  "users": [],
+  "diagnostics": []
+}

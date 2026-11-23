@@ -3,7 +3,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 import { type FormEvent, useState } from "react"
 
 import { AuthError, errorMessage } from "../components/auth-result"
-import { login } from "../lib/surreal"
+import { surreal } from "../lib/surreal"
 
 export const Route = createFileRoute("/sign-in")({
   component: SignIn
@@ -21,7 +21,7 @@ function SignIn() {
     setError(undefined)
 
     try {
-      await login(String(form.get("email")), String(form.get("password")))
+      await surreal.login(String(form.get("email")), String(form.get("password")))
       await navigate({ to: "/" })
     } catch (error) {
       setError(errorMessage(error))

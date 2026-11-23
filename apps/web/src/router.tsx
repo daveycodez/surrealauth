@@ -1,23 +1,23 @@
+import { DbClient, DbProvider } from "@tanstack/react-db"
 import { QueryClient } from "@tanstack/react-query"
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client"
 import { createRouter } from "@tanstack/react-router"
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query"
 
 import { createIDBPersister } from "./lib/idb-persister"
+import { startOfflineWrites } from "./lib/offline"
 import { routeTree } from "./routeTree.gen"
 
-// Saves the app-wide QueryClient to IndexedDB. The session lives in the auth cookie
-// (@surrealauth/react). TanStack DB collections use their own QueryClient and persist to SQLite.
 const persister = createIDBPersister()
 const persistOptions = {
   persister,
-  // Bumped when the token moved to the cookie, discarding caches that still hold it.
   buster: "cookie-token"
 }
 
 export function getRouter() {
-  // The app-wide QueryClient (useQuery). TanStack DB collections use their own.
   const queryClient = new QueryClient()
+  const dbClient = new DbClient()
+  startOfflineWrites(dbClient)
 
   const router = createRouter({
     routeTree,
@@ -25,11 +25,14 @@ export function getRouter() {
     scrollRestoration: true,
     defaultPreload: "intent",
     Wrap: ({ children }) => (
-      <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
-        {children}
-      </PersistQueryClientProvider>
+      <DbProvider client={dbClient}>
+        <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
+          {children}
+        </PersistQueryClientProvider>
+      </DbProvider>
     )
   })
+
   setupRouterSsrQueryIntegration({
     router,
     queryClient

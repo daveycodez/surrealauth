@@ -11,11 +11,12 @@ allowBuilds:
   sharp: true
   workerd: true
 
-# Upstream fixes applied as patches; remove each once it is released:
-# - @surrealdb/tanstack-db: https://github.com/surrealdb/tanstack-db/pull/13 lazy-loads loro-crdt
-#   (CRDT-only, unused here; its top-level import crashes prerendering in the Worker)
-# - @tanstack/db: https://github.com/TanStack/db/pull/2460 compares classes with toJSON() (e.g. RecordId)
-#   by value, so eq(), joins, indexes and useLiveQuery identity work with record ids
+# Upstream fixes applied as a patch; remove it once they are released:
+# - @surrealdb/tanstack-db:
+#   - https://github.com/surrealdb/tanstack-db/pull/12 live on-demand subsets, removes deleted cached rows
+#   - https://github.com/surrealdb/tanstack-db/pull/14 string record ids (recordIds: "string")
+#   - https://github.com/surrealdb/tanstack-db/pull/13 lazy-loads loro-crdt (CRDT-only, unused here;
+#     its top-level import crashes prerendering in the Worker)
+#   - https://github.com/surrealdb/tanstack-db/pull/17 tolerates a LIVE delete arriving first
 patchedDependencies:
   "@surrealdb/tanstack-db": patches/@surrealdb__tanstack-db.patch
-  "@tanstack/db": patches/@tanstack__db.patch

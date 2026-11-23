@@ -1,5 +1,5 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index 29eeb4d..80b1aa6 100644
+index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..f5e7fb4ea596e9e9d15f8eba7890205acb3807bc 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
 @@ -1,7 +1,6 @@
@@ -10,7 +10,907 @@ index 29eeb4d..80b1aa6 100644
  let surrealdb = require("surrealdb");
  let _tanstack_query_core = require("@tanstack/query-core");
  let _tanstack_db = require("@tanstack/db");
-@@ -785,6 +784,14 @@ var WebCryptoAESGCM = class WebCryptoAESGCM {
+@@ -250,11 +249,97 @@ const toRecordId = (tableName, id) => {
+ 	const key = normalized.startsWith(prefixed) ? normalized.slice(prefixed.length) : normalized;
+ 	return new surrealdb.RecordId(tableName, key);
+ };
++// src/internal/records.ts
++const firstRow = (result) => {
++	if (!result) return void 0;
++	if (Array.isArray(result)) return result[0];
++	return result;
++};
++const toRecordArray = (rows) => {
++	if (!rows) return [];
++	return Array.isArray(rows) ? rows : [rows];
++};
++const omitUndefined = (obj) => Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== void 0));
++const isPlainObject = (value) => typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype;
++async function queryRows(db, sql, bindings) {
++	const result = await db.query(sql, bindings ?? {});
++	if (Array.isArray(result)) {
++		const first = result[0];
++		if (Array.isArray(first)) return first;
++	}
++	return [];
++}
++// src/internal/string-ids.ts
++/**
++* Lossless SurrealQL string form of a record id (`RecordId#toString()`),
++* e.g. `user:abc`, `user:42` (number key) or `user:⟨42⟩` (string key).
++*/
++const recordIdToString = (value) => {
++	if (value instanceof surrealdb.RecordId) return value.toString();
++	if (isCrossRuntimeRecordIdObject(value)) return String(value.toString());
++};
++/** Deeply replaces every record id with its lossless string form. */
++const stringifyRecordIdsDeep = (value) => {
++	const asString = recordIdToString(value);
++	if (asString !== void 0) return asString;
++	if (Array.isArray(value)) return value.map((item) => stringifyRecordIdsDeep(item));
++	if (value instanceof Set) return new Set([...value].map((item) => stringifyRecordIdsDeep(item)));
++	if (isPlainObject(value)) {
++		const out = {};
++		for (const [k, v] of Object.entries(value)) out[k] = stringifyRecordIdsDeep(v);
++		return out;
++	}
++	return value;
++};
++/**
++* Resolves a row id to the string form used as the TanStack DB key.
++* Strings already prefixed with the table are kept as-is; bare keys are
++* treated as string keys of `tableName`.
++*/
++const toTableRecordIdString = (tableName, id) => {
++	const asString = recordIdToString(id);
++	if (asString !== void 0) return asString;
++	if (id instanceof surrealdb.StringRecordId) return id.toString();
++	const raw = String(id);
++	const escapedPrefix = new surrealdb.RecordId(tableName, "x").toString().slice(0, -1);
++	if (raw.startsWith(escapedPrefix) || raw.startsWith(`${tableName}:`)) return raw;
++	return new surrealdb.RecordId(tableName, raw).toString();
++};
++/** Converts a record id string back into a value SurrealDB parses as a record id. */
++const toSurrealRecordId = (value) => {
++	if (typeof value === "string") return new surrealdb.StringRecordId(value);
++	if (Array.isArray(value)) return value.map(toSurrealRecordId);
++	if (value instanceof Set) return new Set([...value].map(toSurrealRecordId));
++	return value;
++};
++const convertPath = (value, path, convert) => {
++	if (Array.isArray(value) && path.length > 0) return value.map((item) => convertPath(item, path, convert));
++	if (value instanceof Set && path.length > 0) return new Set([...value].map((item) => convertPath(item, path, convert)));
++	if (path.length === 0) return convert(value);
++	if (!isPlainObject(value)) return value;
++	const [head, ...rest] = path;
++	if (!(head in value)) return value;
++	return {
++		...value,
++		[head]: convertPath(value[head], rest, convert)
++	};
++};
++/**
++* Converts the configured record-link fields (dot paths) of a row from
++* strings to record ids before the row is sent to SurrealDB.
++*/
++const recordFieldsToSurreal = (row, recordFields) => {
++	let out = row;
++	for (const field of recordFields) out = convertPath(out, field.split("."), toSurrealRecordId);
++	return out;
++};
+ // src/internal/collection-identity.ts
+ const SURREAL_COLLECTION_ID_PREFIX = "surreal";
+ const patchedCollections = /* @__PURE__ */ new WeakSet();
+ const normalizeDeleteKeyAgainstState = (state, key) => {
+ 	if (state.has(key)) return key;
++	const asString = recordIdToString(key);
++	if (asString !== void 0 && state.has(asString)) return asString;
+ 	const canonical = asCanonicalRecordIdString(key);
+ 	if (!canonical) return key;
+ 	return state.has(canonical) ? canonical : key;
+@@ -340,53 +425,250 @@ const stripEnvelopeFields = (value) => {
+ 	for (const key of ENVELOPE_FIELDS) delete copy[key];
+ 	return copy;
+ };
+-// src/internal/records.ts
+-const firstRow = (result) => {
+-	if (!result) return void 0;
+-	if (Array.isArray(result)) return result[0];
+-	return result;
++// src/table.ts
++const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
++const toFieldPath = (value) => {
++	if (!Array.isArray(value)) throw new Error("Expected a field path array in where expression.");
++	return value;
+ };
+-const toRecordArray = (rows) => {
+-	if (!rows) return [];
+-	return Array.isArray(rows) ? rows : [rows];
++const quoteIdentifier = (segment) => {
++	if (IDENTIFIER_RE.test(segment)) return segment;
++	return `\`${segment.replaceAll("`", "\\`")}\``;
+ };
+-const omitUndefined = (obj) => Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== void 0));
+-const isPlainObject = (value) => typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype;
+-async function queryRows(db, sql, bindings) {
+-	const result = await db.query(sql, bindings ?? {});
+-	if (Array.isArray(result)) {
+-		const first = result[0];
+-		if (Array.isArray(first)) return first;
++const formatFieldPath = (path) => {
++	let out = "";
++	for (const segment of path) {
++		if (typeof segment === "number") {
++			out += `[${segment}]`;
++			continue;
++		}
++		const next = quoteIdentifier(segment);
++		out = out ? `${out}.${next}` : next;
+ 	}
+-	return [];
+-}
+-// src/internal/schema.ts
+-const TEMP_ID_PREFIX = "__temp__";
+-const createTempRecordId = (tableName) => {
+-	const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+-	return new surrealdb.RecordId(tableName, `${TEMP_ID_PREFIX}${suffix}`);
++	return out;
+ };
+-const isTempId = (id, tableName) => {
+-	const normalized = toRecordIdString(id);
+-	return (normalized.startsWith(`${tableName}:`) ? normalized.slice(tableName.length + 1) : normalized).startsWith(TEMP_ID_PREFIX);
++const isReferencePathCandidate = (value) => Array.isArray(value) && value.length > 0 && typeof value[0] === "string" && value.every((segment) => typeof segment === "string" || typeof segment === "number");
++const mapRelationPath = (path, relation) => {
++	if (!relation) return path;
++	if (path[0] === "from") return ["in", ...path.slice(1)];
++	if (path[0] === "to") return ["out", ...path.slice(1)];
++	return path;
+ };
+-function createInsertSchema(tableName) {
+-	return { "~standard": {
+-		version: 1,
+-		vendor: "tanstack-db-surrealdb",
+-		validate: (value) => {
+-			if (!value || typeof value !== "object" || Array.isArray(value)) return { issues: [{ message: "Insert data must be an object." }] };
+-			const data = normalizeRecordIdLikeFields({ ...value });
+-			if (!data.id) data.id = createTempRecordId(tableName);
+-			return { value: data };
++const normalizeFilterValue = (value) => {
++	if (Array.isArray(value)) return value.map((item) => normalizeFilterValue(item));
++	const native = toNativeRecordIdLikeValue(value);
++	if (native !== value) return native;
++	if (value && typeof value === "object") return normalizeRecordIdLikeValue(value);
++	return normalizeRecordIdLikeValue(value);
++};
++const toSqlFragment = (value) => {
++	if (typeof value === "object" && value !== null && "sql" in value && typeof value.sql === "string") return value;
++	throw new Error("Unsupported where expression node.");
++};
++const joinLogical = (op, args) => {
++	const parts = args.map(toSqlFragment).map((frag) => frag.sql);
++	if (parts.length === 0) return { sql: op === "AND" ? "true" : "false" };
++	if (parts.length === 1) return { sql: parts[0] };
++	return { sql: parts.map((part) => `(${part})`).join(` ${op} `) };
++};
++const filterValueFor = (table, options, fieldPath, value) => {
++	if (!options.recordFields) return normalizeFilterValue(value);
++	const path = mapRelationPath(toFieldPath(fieldPath), table.relation);
++	return options.recordFields.has(path.join(".")) ? toSurrealRecordId(value) : value;
++};
++const whereSqlFrom = (table, expr, bind, scope, options = {}) => {
++	const filterValue = (fieldPath, value) => filterValueFor(table, options, fieldPath, value);
++	const fieldSql = (fieldPath) => {
++		const field = formatFieldPath(mapRelationPath(toFieldPath(fieldPath), table.relation));
++		return scope ? `${scope}.${field}` : field;
++	};
++	const comparison = (fieldPath, op, value) => {
++		const field = fieldSql(fieldPath);
++		if (value === void 0) {
++			if (op === "=") return { sql: `${field} IS NONE` };
++			if (op === "!=") return { sql: `${field} IS NOT NONE` };
++			throw new Error(`Cannot compare field '${field}' with undefined using '${op}'.`);
++		}
++		if (isReferencePathCandidate(value)) throw new Error("Got a field reference on the right side of a where comparison. Pass a concrete value.");
++		return { sql: `${field} ${op} ${bind(filterValue(fieldPath, value))}` };
++	};
++	const fragment = (0, _tanstack_db.parseWhereExpression)(expr, {
++		handlers: {
++			and: (...args) => joinLogical("AND", args),
++			or: (...args) => joinLogical("OR", args),
++			not: (arg) => ({ sql: `NOT (${toSqlFragment(arg).sql})` }),
++			eq: (field, value) => comparison(field, "=", value),
++			gt: (field, value) => comparison(field, ">", value),
++			gte: (field, value) => comparison(field, ">=", value),
++			lt: (field, value) => comparison(field, "<", value),
++			lte: (field, value) => comparison(field, "<=", value),
++			like: (field, value) => comparison(field, "LIKE", value),
++			ilike: (field, value) => {
++				return { sql: `string::lower(${fieldSql(field)}) LIKE string::lower(${bind(filterValue(field, value))})` };
++			},
++			in: (field, value) => {
++				const f = fieldSql(field);
++				if (Array.isArray(value) && value.length === 0) return { sql: "false" };
++				return { sql: `${f} IN ${bind(filterValue(field, value))}` };
++			},
++			isNull: (field) => ({ sql: `${fieldSql(field)} IS NULL` }),
++			isUndefined: (field) => ({ sql: `${fieldSql(field)} IS NONE` })
+ 		},
+-		types: void 0
+-	} };
++		onUnknownOperator: (op) => {
++			throw new Error(`Unsupported where operator '${op}' for SurrealQL translation.`);
++		}
++	});
++	if (!fragment) return "";
++	return fragment.sql;
++};
++const subsetFilters = (subset) => [subset?.where, subset?.cursor?.whereFrom].filter((expr) => Boolean(expr));
++const filterSqlFrom = (table, subset, bind, scope, options = {}) => subsetFilters(subset).map((expr) => whereSqlFrom(table, expr, bind, scope, options)).filter(Boolean);
++const isOrdered = (subset) => Boolean(subset?.orderBy?.length) || typeof subset?.limit === "number" || typeof subset?.offset === "number";
++const subsetOrderOf = (table, subset) => {
++	if (!isOrdered(subset)) return [];
++	const order = (0, _tanstack_db.parseOrderByExpression)(subset?.orderBy).map((clause) => ({
++		field: mapRelationPath(clause.field, table.relation),
++		direction: clause.direction
++	}));
++	if (!order.some((clause) => clause.field.length === 1 && clause.field[0] === "id")) order.push({
++		field: ["id"],
++		direction: "asc"
++	});
++	return order;
++};
++const readFieldPath = (row, path) => {
++	let value = row;
++	for (const segment of path) {
++		if (value === null || typeof value !== "object") return void 0;
++		value = value[segment];
++	}
++	return value;
++};
++const windowBoundaryOf = (table, subset, rows) => {
++	const limit = subset?.limit;
++	if (typeof limit !== "number" || rows.length === 0) return void 0;
++	if (rows.length < limit) return void 0;
++	const leading = subsetOrderOf(table, subset)[0];
++	if (!leading) return void 0;
++	const value = readFieldPath(rows[rows.length - 1], leading.field);
++	if (value === void 0 || value === null) return void 0;
++	return {
++		...leading,
++		value
++	};
++};
++const boundarySql = (table, boundary, bind, scope, options = {}) => {
++	const path = formatFieldPath(boundary.field);
++	const field = scope ? `${scope}.${path}` : path;
++	return `${field} ${boundary.direction === "desc" ? ">=" : "<="} ${bind(filterValueFor(table, options, boundary.field, boundary.value))} OR ${field} IS NONE OR ${field} IS NULL`;
++};
++const buildSubsetQuery = (table, subset, options = {}) => {
++	let paramIdx = 0;
++	const params = { table: table.name };
++	const nextParam = (value) => {
++		const key = `p${paramIdx++}`;
++		params[key] = value;
++		return `$${key}`;
++	};
++	const whereParts = filterSqlFrom(table, subset, nextParam, void 0, options);
++	const whereSql = whereParts.length ? ` WHERE ${whereParts.map((part) => `(${part})`).join(" AND ")}` : "";
++	const order = subsetOrderOf(table, subset);
++	return {
++		sql: `SELECT * FROM type::table($table)${whereSql}${order.length ? ` ORDER BY ${order.map((clause) => `${formatFieldPath(clause.field)} ${clause.direction.toUpperCase()}`).join(", ")}` : ""}${typeof subset?.limit === "number" ? ` LIMIT ${nextParam(subset.limit)}` : ""}${typeof subset?.offset === "number" ? ` START ${nextParam(subset.offset)}` : ""};`,
++		params
++	};
++};
++const buildLiveCondition = (table, subset, boundary, options = {}) => {
++	const scoped = (bind, scope) => {
++		const parts = filterSqlFrom(table, subset, bind, scope, options);
++		if (boundary) parts.push(boundarySql(table, boundary, bind, scope, options));
++		return parts;
++	};
++	if (!subsetFilters(subset).length && !boundary) return void 0;
++	const conjunction = (parts) => parts.map((part) => `(${part})`).join(" AND ");
++	return { toSQL: (ctx) => `(${conjunction(scoped(ctx.def))}) OR ($before IS NOT NONE AND ${conjunction(scoped(ctx.def, "$before"))})` };
++};
++function manageTable(db, config, subsetQueryOptions) {
++	const { name } = config;
++	const table = new surrealdb.Table(name);
++	const listAll = async () => {
++		return loadSubset();
++	};
++	const loadSubset = async (subset) => {
++		const { sql, params } = buildSubsetQuery(config, subset, subsetQueryOptions);
++		const [res] = await db.query(sql, params);
++		return res ?? [];
++	};
++	const create = async (data) => {
++		const id = data.id;
++		if (!id) {
++			const created = await db.create(table).content(data);
++			return firstRow(created);
++		}
++		const payload = { ...data };
++		payload.id = toRecordId(name, id);
++		const inserted = await db.insert(table, payload);
++		return firstRow(inserted);
++	};
++	const update = async (id, data) => {
++		const { id: _ignoredId, ...rest } = data;
++		await db.update(id).merge(rest);
++	};
++	const remove = async (id) => {
++		await db.delete(id);
++	};
++	const subscribe = (cb) => {
++		let killed = false;
++		let live;
++		const on = (msg) => {
++			const { action, value } = msg;
++			if (action === "KILLED") return;
++			if (action === "CREATE") cb({
++				type: "insert",
++				row: value
++			});
++			else if (action === "UPDATE") cb({
++				type: "update",
++				row: value
++			});
++			else if (action === "DELETE") cb({
++				type: "delete",
++				row: { id: value.id }
++			});
++		};
++		const start = async () => {
++			if (!db.isFeatureSupported(surrealdb.Features.LiveQueries)) return;
++			live = await db.live(table);
++			live.subscribe(on);
++		};
++		start();
++		return () => {
++			if (killed) return;
++			killed = true;
++			if (live) live.kill();
++		};
++	};
++	return {
++		listAll,
++		loadSubset,
++		create,
++		update,
++		remove,
++		softDelete: remove,
++		subscribe
++	};
+ }
+ // src/internal/subset-identity.ts
+ const subsetCacheKey = (subset) => {
+ 	const seen = /* @__PURE__ */ new WeakSet();
+-	return JSON.stringify(subset, (_key, value) => {
++	const demand = {
++		where: subset.where,
++		orderBy: subset.orderBy,
++		limit: subset.limit,
++		offset: subset.offset,
++		cursor: subset.cursor
++	};
++	return JSON.stringify(demand, (_key, value) => {
+ 		if (value instanceof Date) return value.toISOString();
+ 		if (value instanceof surrealdb.RecordId) return toRecordIdString(value);
+ 		if (typeof value === "bigint") return value.toString();
+@@ -498,6 +780,267 @@ const applyPreferredRecordIdIdentityToCollection = (ctx, preferredByCanonical) =
+ 	const indexes = collectionWithInternals._indexes?.indexes;
+ 	if (entries && indexes) for (const index of indexes.values()) index.build?.(entries);
+ };
++// src/internal/live-subsets.ts
++const compileMatcher = (options, whenUnknown) => {
++	const exprs = [options.where, options.cursor?.whereFrom].filter((expr) => Boolean(expr));
++	if (!exprs.length) return () => true;
++	try {
++		const evaluators = exprs.map((expr) => (0, _tanstack_db.compileSingleRowExpression)(expr));
++		return (row) => {
++			try {
++				return evaluators.every((evaluate) => (0, _tanstack_db.toBooleanPredicate)(evaluate(row)));
++			} catch {
++				return whenUnknown;
++			}
++		};
++	} catch {
++		return () => whenUnknown;
++	}
++};
++const comparable = (value) => {
++	if (value instanceof Date) return value.getTime();
++	return typeof value === "string" || typeof value === "number" || typeof value === "bigint" ? value : void 0;
++};
++const isBeforeBoundary = (value, boundary, direction) => {
++	const a = comparable(value);
++	const b = comparable(boundary);
++	if (a === void 0 || b === void 0 || typeof a !== typeof b) return false;
++	return direction === "asc" ? a < b : a > b;
++};
++function createLiveSubsets(config) {
++	const { db, table, tracker, loadRows, decode, writeRows, evict, syncedRows } = config;
++	const tableResource = new surrealdb.Table(table.name);
++	const entries = /* @__PURE__ */ new Map();
++	const report = (error) => config.onError?.(error);
++	const idOf = config.idOf ?? toRecordKeyString;
++	const liveSupported = async () => {
++		try {
++			await db.ready;
++			return db.isFeatureSupported?.(surrealdb.Features.LiveQueries) === true;
++		} catch {
++			return false;
++		}
++	};
++	const released = /* @__PURE__ */ new WeakSet();
++	let signedOut = false;
++	const release = (lives) => {
++		for (const live of lives) {
++			released.add(live);
++			live.kill().catch(() => void 0);
++		}
++	};
++	const enqueue = (entry, task) => {
++		const run = entry.chain.then(task);
++		entry.chain = run.catch(() => void 0);
++		return run;
++	};
++	const handle = async (entry, message) => {
++		if (entry.closed) return;
++		const raw = message.value;
++		if (!raw || raw.id === void 0) return;
++		const id = idOf(raw.id);
++		if (message.action === "DELETE") {
++			tracker.deleteId(id);
++			await evict([id]);
++			return;
++		}
++		const row = await decode(raw);
++		if (entry.matches(row)) {
++			tracker.addId(entry.key, id);
++			await writeRows([row]);
++			return;
++		}
++		tracker.removeId(entry.key, id);
++		if (tracker.has(id)) await writeRows([row]);
++		else await evict([id]);
++	};
++	const receive = (entry, live) => (message) => {
++		if (entry.closed || released.has(live)) return;
++		if (message.action === "KILLED") return;
++		if (entry.loading) {
++			entry.buffer.push(message);
++			return;
++		}
++		enqueue(entry, () => handle(entry, message)).catch(report);
++	};
++	const flush = (entry) => {
++		entry.loading = false;
++		for (const message of entry.buffer.splice(0)) enqueue(entry, () => handle(entry, message)).catch(report);
++	};
++	const openLive = async (entry, condition) => {
++		const builder = db.live(tableResource);
++		const live = await (condition ? builder.where(condition) : builder);
++		if (entry.closed) {
++			release([live]);
++			return;
++		}
++		live.subscribe(receive(entry, live));
++		return live;
++	};
++	const missingFromSnapshot = (entry, rows) => {
++		const { limit, offset } = entry.options;
++		if (offset || signedOut) return [];
++		const isFullWindow = typeof limit === "number" && rows.length >= limit;
++		const leading = subsetOrderOf(table, entry.options)[0];
++		const last = rows[rows.length - 1];
++		if (isFullWindow && (!leading || !last)) return [];
++		const inRange = (row) => !isFullWindow || isBeforeBoundary(readFieldPath(row, leading?.field ?? []), readFieldPath(last, leading?.field ?? []), leading?.direction ?? "asc");
++		const missing = [];
++		for (const row of syncedRows()) {
++			const id = idOf(row.id);
++			if (!tracker.has(id) && entry.surelyMatches(row) && inRange(row)) missing.push(id);
++		}
++		return missing;
++	};
++	const applySnapshot = async (entry, raws) => {
++		const rows = await Promise.all(raws.map((raw) => decode(raw)));
++		const previous = [...tracker.idsOf(entry.key)];
++		tracker.set(entry.key, new Set(rows.map((row) => idOf(row.id))));
++		await writeRows(rows);
++		const dropped = /* @__PURE__ */ new Set([...previous.filter((id) => !tracker.has(id)), ...missingFromSnapshot(entry, rows)]);
++		if (dropped.size) await evict([...dropped]);
++	};
++	const sync = async (entry) => {
++		const generation = ++entry.generation;
++		const stale = () => entry.closed || generation !== entry.generation;
++		const previous = entry.lives;
++		const opened = [];
++		entry.loading = true;
++		try {
++			const live = await liveSupported() ? await openLive(entry, buildLiveCondition(table, entry.options, void 0, config.queryOptions)) : void 0;
++			if (live) opened.push(live);
++			if (stale()) return release(opened.splice(0));
++			const rows = await loadRows(entry.options);
++			if (stale()) return release(opened.splice(0));
++			await enqueue(entry, () => applySnapshot(entry, rows));
++			const boundary = windowBoundaryOf(table, entry.options, rows);
++			if (live && boundary) {
++				const bounded = await openLive(entry, buildLiveCondition(table, entry.options, boundary, config.queryOptions));
++				if (bounded) {
++					opened.push(bounded);
++					release(opened.splice(0, 1));
++				}
++			}
++			if (stale()) return release(opened.splice(0));
++			entry.lives = opened.splice(0);
++			release(previous);
++		} catch (error) {
++			release(opened.splice(0));
++			throw error;
++		} finally {
++			if (generation === entry.generation) flush(entry);
++		}
++	};
++	const load = async (options) => {
++		const key = subsetCacheKey(options);
++		const existing = entries.get(key);
++		if (existing) {
++			if (options.refetch) existing.ready = sync(existing);
++			else existing.refs += 1;
++			return existing.ready;
++		}
++		const entry = {
++			key,
++			options,
++			refs: 1,
++			closed: false,
++			generation: 0,
++			lives: [],
++			loading: false,
++			buffer: [],
++			chain: Promise.resolve(),
++			ready: Promise.resolve(),
++			matches: compileMatcher(options, true),
++			surelyMatches: compileMatcher(options, false)
++		};
++		entries.set(key, entry);
++		tracker.set(key, /* @__PURE__ */ new Set());
++		entry.ready = sync(entry);
++		return entry.ready;
++	};
++	const unload = (options) => {
++		const key = subsetCacheKey(options);
++		const entry = entries.get(key);
++		if (!entry) return;
++		entry.refs -= 1;
++		if (entry.refs > 0) return;
++		entries.delete(key);
++		entry.closed = true;
++		entry.buffer.length = 0;
++		release(entry.lives.splice(0));
++		const ids = [...tracker.idsOf(key)];
++		tracker.delete(key);
++		const orphaned = ids.filter((id) => !tracker.has(id));
++		if (orphaned.length) evict(orphaned).catch(report);
++	};
++	const resync = async () => {
++		const active = [...entries.values()];
++		if (!active.length) return;
++		await Promise.all(active.map((entry) => sync(entry).catch(report)));
++		config.invalidate();
++	};
++	const unsubscribers = [];
++	const events = db;
++	if (typeof events.subscribe === "function") {
++		let dropped = false;
++		const markDropped = () => {
++			dropped = true;
++		};
++		unsubscribers.push(events.subscribe("reconnecting", markDropped), events.subscribe("disconnected", markDropped), events.subscribe("connected", () => {
++			if (!dropped) return;
++			dropped = false;
++			resync().catch(report);
++		}), events.subscribe("auth", (tokens) => {
++			const renewed = signedOut && Boolean(tokens);
++			signedOut = !tokens;
++			if (renewed) resync().catch(report);
++		}));
++	}
++	const cleanup = () => {
++		for (const unsubscribe of unsubscribers.splice(0)) unsubscribe();
++		for (const entry of entries.values()) {
++			entry.closed = true;
++			entry.buffer.length = 0;
++			release(entry.lives.splice(0));
++			tracker.delete(entry.key);
++		}
++		entries.clear();
++	};
++	return {
++		load,
++		unload,
++		resync,
++		cleanup
++	};
++}
++// src/internal/schema.ts
++const TEMP_ID_PREFIX = "__temp__";
++const createTempRecordId = (tableName) => {
++	const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
++	return new surrealdb.RecordId(tableName, `${TEMP_ID_PREFIX}${suffix}`);
++};
++const isTempId = (id, tableName) => {
++	const normalized = toRecordIdString(id);
++	return (normalized.startsWith(`${tableName}:`) ? normalized.slice(tableName.length + 1) : normalized).startsWith(TEMP_ID_PREFIX);
++};
++function createInsertSchema(tableName, recordIds = "native") {
++	return { "~standard": {
++		version: 1,
++		vendor: "tanstack-db-surrealdb",
++		validate: (value) => {
++			if (!value || typeof value !== "object" || Array.isArray(value)) return { issues: [{ message: "Insert data must be an object." }] };
++			if (recordIds === "string") {
++				const data = stringifyRecordIdsDeep({ ...value });
++				data.id = toTableRecordIdString(tableName, data.id ?? createTempRecordId(tableName));
++				return { value: data };
++			}
++			const data = normalizeRecordIdLikeFields({ ...value });
++			if (!data.id) data.id = createTempRecordId(tableName);
++			return { value: data };
++		},
++		types: void 0
++	} };
++}
+ // src/internal/subset-tracker.ts
+ var ActiveSubsetTracker = class {
+ 	subsetIds = /* @__PURE__ */ new Map();
+@@ -508,10 +1051,24 @@ var ActiveSubsetTracker = class {
+ 	has(id) {
+ 		return this.activeIds.has(id);
+ 	}
++	idsOf(key) {
++		return this.subsetIds.get(key) ?? /* @__PURE__ */ new Set();
++	}
+ 	set(key, ids) {
+ 		this.subsetIds.set(key, ids);
+ 		this.rebuildActiveIds();
+ 	}
++	addId(key, id) {
++		const ids = this.subsetIds.get(key);
++		if (!ids) return;
++		ids.add(id);
++		this.activeIds.add(id);
++	}
++	removeId(key, id) {
++		if (!this.subsetIds.get(key)?.delete(id)) return;
++		for (const other of this.subsetIds.values()) if (other.has(id)) return;
++		this.activeIds.delete(id);
++	}
+ 	delete(key) {
+ 		this.subsetIds.delete(key);
+ 		this.rebuildActiveIds();
+@@ -542,184 +1099,47 @@ const toTableResource = (table) => {
+ 	return new surrealdb.Table(normalized.name);
+ };
+ const tableNameOf = (table) => toTableOptions(table).name;
+-// src/table.ts
+-const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+-const toFieldPath = (value) => {
+-	if (!Array.isArray(value)) throw new Error("Expected a field path array in where expression.");
+-	return value;
+-};
+-const quoteIdentifier = (segment) => {
+-	if (IDENTIFIER_RE.test(segment)) return segment;
+-	return `\`${segment.replaceAll("`", "\\`")}\``;
+-};
+-const formatFieldPath = (path) => {
+-	let out = "";
+-	for (const segment of path) {
+-		if (typeof segment === "number") {
+-			out += `[${segment}]`;
+-			continue;
+-		}
+-		const next = quoteIdentifier(segment);
+-		out = out ? `${out}.${next}` : next;
++// src/schema.ts
++const holdsText = (kind) => kind.kind === "string" || kind.kind === "union" && (kind.variants ?? []).some(holdsText);
++const holdsRecord = (kind) => kind.kind === "record" || kind.kind === "union" && (kind.variants ?? []).some(holdsRecord);
++const collectRecordPaths = (kind, path, out, table) => {
++	if (!kind) return;
++	switch (kind.kind) {
++		case "record":
++			out.add(path.join("."));
++			return;
++		case "union":
++			if (holdsRecord(kind) && holdsText(kind)) throw new Error(`${table}.${path.join(".")} can hold both a record and a string, which string record ids cannot tell apart.`);
++			for (const variant of kind.variants ?? []) collectRecordPaths(variant, path, out, table);
++			return;
++		case "array":
++		case "set":
++			collectRecordPaths(kind.item, path, out, table);
++			return;
++		case "objectLiteral":
++			for (const field of kind.fields ?? []) collectRecordPaths(field.kind, [...path, field.name], out, table);
++			return;
+ 	}
+-	return out;
+ };
+-const isReferencePathCandidate = (value) => Array.isArray(value) && value.length > 0 && typeof value[0] === "string" && value.every((segment) => typeof segment === "string" || typeof segment === "number");
+-const mapRelationPath = (path, relation) => {
+-	if (!relation) return path;
+-	if (path[0] === "from") return ["in", ...path.slice(1)];
+-	if (path[0] === "to") return ["out", ...path.slice(1)];
+-	return path;
+-};
+-const normalizeFilterValue = (value) => {
+-	if (Array.isArray(value)) return value.map((item) => normalizeFilterValue(item));
+-	const native = toNativeRecordIdLikeValue(value);
+-	if (native !== value) return native;
+-	if (value && typeof value === "object") return normalizeRecordIdLikeValue(value);
+-	return normalizeRecordIdLikeValue(value);
+-};
+-const toSqlFragment = (value) => {
+-	if (typeof value === "object" && value !== null && "sql" in value && typeof value.sql === "string") return value;
+-	throw new Error("Unsupported where expression node.");
+-};
+-const joinLogical = (op, args) => {
+-	const parts = args.map(toSqlFragment).map((frag) => frag.sql);
+-	if (parts.length === 0) return { sql: op === "AND" ? "true" : "false" };
+-	if (parts.length === 1) return { sql: parts[0] };
+-	return { sql: parts.map((part) => `(${part})`).join(` ${op} `) };
+-};
+-const buildSubsetQuery = (table, subset) => {
+-	let paramIdx = 0;
+-	const params = { table: table.name };
+-	const nextParam = (value) => {
+-		const key = `p${paramIdx++}`;
+-		params[key] = value;
+-		return `$${key}`;
+-	};
+-	const comparison = (fieldPath, op, value) => {
+-		const field = formatFieldPath(mapRelationPath(toFieldPath(fieldPath), table.relation));
+-		if (value === void 0) {
+-			if (op === "=") return { sql: `${field} IS NONE` };
+-			if (op === "!=") return { sql: `${field} IS NOT NONE` };
+-			throw new Error(`Cannot compare field '${field}' with undefined using '${op}'.`);
+-		}
+-		if (isReferencePathCandidate(value)) throw new Error("Got a field reference on the right side of a where comparison. Pass a concrete value.");
+-		return { sql: `${field} ${op} ${nextParam(normalizeFilterValue(value))}` };
+-	};
+-	const whereSqlFrom = (expr) => {
+-		const fragment = (0, _tanstack_db.parseWhereExpression)(expr, {
+-			handlers: {
+-				and: (...args) => joinLogical("AND", args),
+-				or: (...args) => joinLogical("OR", args),
+-				not: (arg) => ({ sql: `NOT (${toSqlFragment(arg).sql})` }),
+-				eq: (field, value) => comparison(field, "=", value),
+-				gt: (field, value) => comparison(field, ">", value),
+-				gte: (field, value) => comparison(field, ">=", value),
+-				lt: (field, value) => comparison(field, "<", value),
+-				lte: (field, value) => comparison(field, "<=", value),
+-				like: (field, value) => comparison(field, "LIKE", value),
+-				ilike: (field, value) => {
+-					return { sql: `string::lower(${formatFieldPath(mapRelationPath(toFieldPath(field), table.relation))}) LIKE string::lower(${nextParam(normalizeFilterValue(value))})` };
+-				},
+-				in: (field, value) => {
+-					const f = formatFieldPath(mapRelationPath(toFieldPath(field), table.relation));
+-					if (Array.isArray(value) && value.length === 0) return { sql: "false" };
+-					return { sql: `${f} IN ${nextParam(normalizeFilterValue(value))}` };
+-				},
+-				isNull: (field) => ({ sql: `${formatFieldPath(mapRelationPath(toFieldPath(field), table.relation))} IS NULL` }),
+-				isUndefined: (field) => ({ sql: `${formatFieldPath(mapRelationPath(toFieldPath(field), table.relation))} IS NONE` })
+-			},
+-			onUnknownOperator: (op) => {
+-				throw new Error(`Unsupported where operator '${op}' for SurrealQL translation.`);
+-			}
+-		});
+-		if (!fragment) return "";
+-		return fragment.sql;
+-	};
+-	const whereParts = [];
+-	if (subset?.where) {
+-		const parsed = whereSqlFrom(subset.where);
+-		if (parsed) whereParts.push(parsed);
++/** Reads a table's relation flag and record-link fields from SurrealKit's `tables`. */
++function schemaTableOptions(tables, name) {
++	const table = tables.find((candidate) => candidate.name === name);
++	if (!table) throw new Error(`Table "${name}" is not in the provided schema tables.`);
++	const relation = table.type?.kind === "relation";
++	const paths = /* @__PURE__ */ new Set();
++	for (const field of table.fields ?? []) {
++		if (!Array.isArray(field.path)) throw new Error("Expected tables from a version 2 schema document (surrealkit compile).");
++		const path = field.path.filter((part) => part !== "*");
++		collectRecordPaths(field.kind, path, paths, table.name);
+ 	}
+-	if (subset?.cursor?.whereFrom) {
+-		const cursorWhere = whereSqlFrom(subset.cursor.whereFrom);
+-		if (cursorWhere) whereParts.push(cursorWhere);
++	paths.delete("id");
++	if (relation) {
++		paths.delete("in");
++		paths.delete("out");
+ 	}
+-	const whereSql = whereParts.length ? ` WHERE ${whereParts.map((part) => `(${part})`).join(" AND ")}` : "";
+-	const order = (0, _tanstack_db.parseOrderByExpression)(subset?.orderBy);
+-	return {
+-		sql: `SELECT * FROM type::table($table)${whereSql}${order.length ? ` ORDER BY ${order.map((clause) => `${formatFieldPath(mapRelationPath(clause.field, table.relation))} ${clause.direction.toUpperCase()}`).join(", ")}` : ""}${typeof subset?.limit === "number" ? ` LIMIT ${nextParam(subset.limit)}` : ""}${typeof subset?.offset === "number" ? ` START ${nextParam(subset.offset)}` : ""};`,
+-		params
+-	};
+-};
+-function manageTable(db, config) {
+-	const { name } = config;
+-	const table = new surrealdb.Table(name);
+-	const listAll = async () => {
+-		return loadSubset();
+-	};
+-	const loadSubset = async (subset) => {
+-		const { sql, params } = buildSubsetQuery(config, subset);
+-		const [res] = await db.query(sql, params);
+-		return res ?? [];
+-	};
+-	const create = async (data) => {
+-		const id = data.id;
+-		if (!id) {
+-			const created = await db.create(table).content(data);
+-			return firstRow(created);
+-		}
+-		const payload = { ...data };
+-		payload.id = toRecordId(name, id);
+-		const inserted = await db.insert(table, payload);
+-		return firstRow(inserted);
+-	};
+-	const update = async (id, data) => {
+-		const { id: _ignoredId, ...rest } = data;
+-		await db.update(id).merge(rest);
+-	};
+-	const remove = async (id) => {
+-		await db.delete(id);
+-	};
+-	const subscribe = (cb) => {
+-		let killed = false;
+-		let live;
+-		const on = (msg) => {
+-			const { action, value } = msg;
+-			if (action === "KILLED") return;
+-			if (action === "CREATE") cb({
+-				type: "insert",
+-				row: value
+-			});
+-			else if (action === "UPDATE") cb({
+-				type: "update",
+-				row: value
+-			});
+-			else if (action === "DELETE") cb({
+-				type: "delete",
+-				row: { id: value.id }
+-			});
+-		};
+-		const start = async () => {
+-			if (!db.isFeatureSupported(surrealdb.Features.LiveQueries)) return;
+-			live = await db.live(table);
+-			live.subscribe(on);
+-		};
+-		start();
+-		return () => {
+-			if (killed) return;
+-			killed = true;
+-			if (live) live.kill();
+-		};
+-	};
+ 	return {
+-		listAll,
+-		loadSubset,
+-		create,
+-		update,
+-		remove,
+-		softDelete: remove,
+-		subscribe
++		relation,
++		recordFields: [...paths].sort()
+ 	};
+ }
+ // src/encryption/index.ts
+@@ -785,17 +1205,36 @@ var WebCryptoAESGCM = class WebCryptoAESGCM {
  };
  // src/index.ts
  const NOOP = () => {};
@@ -25,7 +925,68 @@ index 29eeb4d..80b1aa6 100644
  const getWriteUtils = (utils) => typeof utils === "object" && utils !== null ? utils : {};
  const syncModeFrom = (syncMode) => syncMode ?? "eager";
  function modernSurrealCollectionOptions(config) {
-@@ -861,10 +868,13 @@ function modernSurrealCollectionOptions(config) {
+-	const { db, table, queryClient, queryKey, onError, e2ee, crdt, syncMode: inputSyncMode } = config;
++	const { db, table, queryClient, queryKey, onError, e2ee, crdt, syncMode: inputSyncMode, recordIds: recordIdMode = "native", tables: schemaTables } = config;
+ 	if (!queryClient || !queryKey) throw new Error("queryClient and queryKey are required.");
+ 	const syncMode = syncModeFrom(inputSyncMode);
+ 	const isOnDemandLike = syncMode === "on-demand" || syncMode === "progressive";
+ 	const isStrictOnDemand = syncMode === "on-demand";
+ 	const queryDrivenSyncMode = "on-demand";
+-	const tableOptions = toTableOptions(table);
+-	const tableName = tableOptions.name;
++	const inputTableOptions = toTableOptions(table);
++	const tableName = inputTableOptions.name;
++	const stringIds = recordIdMode === "string";
++	const schemaOptions = stringIds && schemaTables ? schemaTableOptions(schemaTables, tableName) : void 0;
++	const tableOptions = {
++		...inputTableOptions,
++		relation: inputTableOptions.relation || schemaOptions?.relation
++	};
++	const recordFields = [
++		"id",
++		...tableOptions.relation ? ["in", "out"] : [],
++		...schemaOptions?.recordFields ?? []
++	];
+ 	const collectionId = config.id ?? deriveCollectionId(tableName, queryKey);
+ 	const tableResource = toTableResource(table);
+ 	const activeSubsets = new ActiveSubsetTracker();
+@@ -814,12 +1253,24 @@ function modernSurrealCollectionOptions(config) {
+ 		if (!crdtApplyLocalChange) throw missingCrdtHandlers();
+ 		crdtApplyLocalChange(...args);
+ 	};
+-	const tableAccess = manageTable(db, tableOptions);
++	const tableAccess = manageTable(db, tableOptions, stringIds ? { recordFields: new Set(recordFields) } : void 0);
+ 	const docs = /* @__PURE__ */ new Map();
+ 	const aadFor = (ctx) => (e2ee?.aad ?? defaultAad)(ctx);
+-	const getKey = (row) => toRecordIdString(row.id);
++	const toIdString = (id) => toTableRecordIdString(tableName, id);
++	const getKey = (row) => stringIds ? toIdString(row.id) : toRecordIdString(row.id);
+ 	const normalizeMutationId = (id) => toRecordId(tableName, id);
++	const toRowId = (id) => stringIds ? toIdString(id) : normalizeMutationId(id);
++	const toSurrealId = (id) => stringIds ? toSurrealRecordId(toIdString(id)) : normalizeMutationId(id);
++	const toSurrealFields = (row) => stringIds ? recordFieldsToSurreal(row, recordFields) : row;
++	const deleteKeyFor = (id) => stringIds ? toIdString(id) : `${tableName}:${toRecordKeyString(id)}`;
+ 	const normalizeRow = (row) => {
++		if (stringIds) {
++			const stringified = stringifyRecordIdsDeep(row);
++			return {
++				...stringified,
++				id: toIdString(stringified.id)
++			};
++		}
+ 		const normalized = normalizeRecordIdLikeValueDeep(row);
+ 		return {
+ 			...normalized,
+@@ -842,7 +1293,7 @@ function modernSurrealCollectionOptions(config) {
+ 		const merged = {
+ 			...stripEnvelopeFields(row),
+ 			...payload,
+-			id: normalizeMutationId(row.id)
++			id: toRowId(row.id)
+ 		};
+ 		return normalizeRow(merged);
+ 	};
+@@ -861,10 +1312,13 @@ function modernSurrealCollectionOptions(config) {
  	const updatesTableName = crdtEnabled ? tableNameOf(crdt.updatesTable) : void 0;
  	const updatesTable = crdtEnabled ? toTableResource(crdt.updatesTable) : void 0;
  	const snapshotsTableName = crdtEnabled && crdt.snapshotsTable ? tableNameOf(crdt.snapshotsTable) : void 0;
@@ -41,7 +1002,26 @@ index 29eeb4d..80b1aa6 100644
  		docs.set(id, doc);
  		return doc;
  	};
-@@ -960,7 +970,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -937,14 +1391,14 @@ function modernSurrealCollectionOptions(config) {
+ 		const id = toRecordKeyString(materialized.id);
+ 		if (!e2eeEnabled) {
+ 			const { id: _ignoredId, ...rest } = materialized;
+-			await db.upsert(normalizeMutationId(materialized.id)).merge(rest);
++			await db.upsert(toSurrealId(materialized.id)).merge(toSurrealFields(rest));
+ 			return;
+ 		}
+-		const payload = await encodeBaseRow(omitUndefined({
++		const payload = await encodeBaseRow(toSurrealFields(omitUndefined({
+ 			...materialized,
+ 			id: void 0
+-		}), id);
+-		await db.upsert(normalizeMutationId(materialized.id)).merge(payload);
++		})), id);
++		await db.upsert(toSurrealId(materialized.id)).merge(payload);
+ 	};
+ 	const hydratePlainRows = async (rows, write, begin, commit, type = "insert") => {
+ 		if (!rows.length) return;
+@@ -960,7 +1414,7 @@ function modernSurrealCollectionOptions(config) {
  	};
  	const hydrateCrdtDoc = async (id, write, begin, commit, writeType = "insert") => {
  		if (!crdtEnabled || !updatesTableName) return;
@@ -50,7 +1030,28 @@ index 29eeb4d..80b1aa6 100644
  		let since;
  		if (snapshotsTableName) {
  			const snapshot = (await queryRows(db, `SELECT * FROM type::table($table) WHERE doc = $doc ORDER BY ts DESC LIMIT 1;`, {
-@@ -1058,7 +1068,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1009,17 +1463,14 @@ function modernSurrealCollectionOptions(config) {
+ 			live.subscribe(async (message) => {
+ 				if (message.action === "KILLED") return;
+ 				const row = message.value;
+-				const id = toRecordKeyString(row.id);
+-				const wasVisible = activeSubsets.has(id);
+-				if (isStrictOnDemand && !wasVisible && message.action !== "DELETE") return;
++				const rowId = row.id;
++				toRecordKeyString(rowId);
+ 				if (message.action === "DELETE") {
+-					activeSubsets.deleteId(id);
+-					if (isStrictOnDemand && !wasVisible) return;
+ 					ctx.begin();
+ 					try {
+ 						ctx.write({
+ 							type: "delete",
+-							key: `${tableName}:${id}`
++							key: deleteKeyFor(rowId)
+ 						});
+ 					} finally {
+ 						ctx.commit();
+@@ -1058,7 +1509,7 @@ function modernSurrealCollectionOptions(config) {
  				const id = idFromDocRef(value.doc);
  				if (value.actor && value.actor === resolveActor(id)) return;
  				if (isStrictOnDemand && !activeSubsets.has(id)) return;
@@ -59,7 +1060,144 @@ index 29eeb4d..80b1aa6 100644
  				const bytes = await decodeUpdateBytes(value, "update");
  				if (!bytes.byteLength) return;
  				doc.import(bytes);
-@@ -1184,7 +1194,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1078,9 +1529,59 @@ function modernSurrealCollectionOptions(config) {
+ 				cleanupUpdateLive = NOOP;
+ 			};
+ 		};
++		const collectionHas = (key) => typeof ctx.collection?.has === "function" ? ctx.collection.has(key) : void 0;
++		const liveSubsets = isOnDemandLike && !crdtEnabled ? createLiveSubsets({
++			db,
++			table: tableOptions,
++			tracker: activeSubsets,
++			idOf: stringIds ? toIdString : void 0,
++			queryOptions: stringIds ? { recordFields: new Set(recordFields) } : void 0,
++			onError,
++			loadRows: (subset) => tableAccess.loadSubset(subset),
++			decode: decodeBaseRow,
++			writeRows: async (rows) => {
++				if (!rows.length) return;
++				ctx.begin();
++				let receipt;
++				try {
++					for (const row of rows) ctx.write({
++						type: collectionHas(getKey(row)) ? "update" : "insert",
++						value: row
++					});
++				} finally {
++					receipt = ctx.commit();
++				}
++				await receipt;
++			},
++			evict: async (ids) => {
++				const keys = ids.map((id) => stringIds ? id : `${tableName}:${id}`).filter((key) => collectionHas(key) !== false);
++				if (!keys.length) return;
++				ctx.begin();
++				let receipt;
++				try {
++					for (const key of keys) ctx.write({
++						type: "delete",
++						key
++					});
++				} finally {
++					receipt = ctx.commit();
++				}
++				await receipt;
++			},
++			syncedRows: () => ctx.collection._state?.syncedData?.values() ?? [],
++			invalidate: () => {
++				ctx.invalidateLoadedSubsets?.();
++			}
++		}) : void 0;
+ 		const loadSubset = async (subset) => {
+-			const preferredFromSubset = primeRecordIdIdentityFromSubset(subset);
+-			applyPreferredRecordIdIdentityToCollection(ctx, preferredFromSubset);
++			if (!stringIds) {
++				const preferredFromSubset = primeRecordIdIdentityFromSubset(subset);
++				applyPreferredRecordIdIdentityToCollection(ctx, preferredFromSubset);
++			}
++			if (liveSubsets) {
++				await liveSubsets.load(subset);
++				return;
++			}
+ 			const key = subsetCacheKey(subset);
+ 			const rows = await tableAccess.loadSubset(subset);
+ 			const ids = new Set(rows.map((row) => toRecordKeyString(row.id)));
+@@ -1104,7 +1605,11 @@ function modernSurrealCollectionOptions(config) {
+ 			await ensureUpdateLive();
+ 		};
+ 		const unloadSubset = (subset) => {
+-			primeRecordIdIdentityFromSubset(subset);
++			if (!stringIds) primeRecordIdIdentityFromSubset(subset);
++			if (liveSubsets) {
++				liveSubsets.unload(subset);
++				return;
++			}
+ 			const key = subsetCacheKey(subset);
+ 			activeSubsets.delete(key);
+ 			if (activeSubsets.size === 0) {
+@@ -1121,6 +1626,7 @@ function modernSurrealCollectionOptions(config) {
+ 		};
+ 		const cleanup = () => {
+ 			killed = true;
++			liveSubsets?.cleanup();
+ 			activeSubsets.clear();
+ 			cleanupBaseLive();
+ 			cleanupUpdateLive();
+@@ -1132,16 +1638,23 @@ function modernSurrealCollectionOptions(config) {
+ 			unloadSubset
+ 		};
+ 	};
++	const writeDeleteIfPresent = (writeUtils, key) => {
++		(async () => writeUtils.writeDelete?.(key))().catch((error) => {
++			if (error instanceof _tanstack_query_db_collection.DeleteOperationItemNotFoundError) return;
++			if (!onError) throw error;
++			onError(error);
++		});
++	};
+ 	const base = (0, _tanstack_query_db_collection.queryCollectionOptions)({
+ 		id: collectionId,
+-		schema: createInsertSchema(tableName),
++		schema: createInsertSchema(tableName, recordIdMode),
+ 		getKey,
+ 		queryKey,
+ 		queryClient,
+ 		syncMode: queryDrivenSyncMode,
+ 		queryFn: async ({ meta }) => {
+ 			try {
+-				primeRecordIdIdentityFromSubset(meta?.loadSubsetOptions);
++				if (!stringIds) primeRecordIdIdentityFromSubset(meta?.loadSubsetOptions);
+ 				if (!meta?.loadSubsetOptions) return [];
+ 				if (!crdtEnabled) {
+ 					const rows = await tableAccess.loadSubset(meta?.loadSubsetOptions);
+@@ -1160,10 +1673,10 @@ function modernSurrealCollectionOptions(config) {
+ 				const normalized = normalizeRow(mutation.modified);
+ 				if (!crdtEnabled) {
+ 					const idKey = toRecordKeyString(normalized.id);
+-					const payload = omitUndefined({
++					const payload = toSurrealFields(omitUndefined({
+ 						...normalized,
+ 						id: void 0
+-					});
++					}));
+ 					const recordPayload = await encodeBaseRow(payload, idKey);
+ 					if (isTempId(normalized.id, tableName)) {
+ 						const created = await db.create(tableResource).content(recordPayload);
+@@ -1171,20 +1684,20 @@ function modernSurrealCollectionOptions(config) {
+ 						const createdId = createdRow && createdRow.id ? createdRow.id : normalized.id;
+ 						const resolved = {
+ 							...normalized,
+-							id: normalizeMutationId(createdId)
++							id: toRowId(createdId)
+ 						};
+ 						writeUtils.writeUpsert?.(resolved);
+ 						continue;
+ 					}
+ 					await db.insert(tableResource, {
+-						id: normalizeMutationId(normalized.id),
++						id: toSurrealId(normalized.id),
+ 						...recordPayload
+ 					});
+ 					writeUtils.writeUpsert?.(normalized);
  					continue;
  				}
  				const id = toRecordKeyString(normalized.id);
@@ -68,17 +1206,74 @@ index 29eeb4d..80b1aa6 100644
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "insert",
-@@ -1234,7 +1244,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1205,27 +1718,34 @@ function modernSurrealCollectionOptions(config) {
+ 			const writeUtils = getWriteUtils(params.collection.utils);
+ 			for (const mutation of params.transaction.mutations) {
+ 				if (mutation.type !== "update") continue;
+-				const mutationId = normalizeMutationId(mutation.key);
+-				const normalizedModified = omitUndefined(normalizeRecordIdLikeFields({ ...mutation.modified }));
++				const mutationKey = mutation.key;
++				const mutationId = toSurrealId(mutationKey);
++				const rowId = toRowId(mutationKey);
++				const modified = { ...mutation.modified };
++				const normalizedModified = omitUndefined(stringIds ? stringifyRecordIdsDeep(modified) : normalizeRecordIdLikeFields(modified));
+ 				const normalized = normalizeRow({
+ 					...normalizedModified,
+-					id: mutationId
++					id: rowId
+ 				});
++				const fieldsToWrite = stringIds ? omitUndefined(stringifyRecordIdsDeep({
++					...mutation.changes,
++					id: void 0
++				})) : normalizedModified;
+ 				if (!crdtEnabled) {
+ 					if (!e2eeEnabled) {
+-						await db.update(mutationId).merge(normalizedModified);
+-						writeUtils.writeUpsert?.(normalized);
++						if (await db.update(mutationId).merge(toSurrealFields(fieldsToWrite))) writeUtils.writeUpsert?.(normalized);
++						else writeDeleteIfPresent(writeUtils, deleteKeyFor(rowId));
+ 						continue;
+ 					}
+ 					const current = await db.select(mutationId);
+ 					const currentRow = toRecordArray(current)[0];
+-					const decodedCurrent = currentRow ? await decodeBaseRow(currentRow) : { id: mutationId };
++					const decodedCurrent = currentRow ? await decodeBaseRow(currentRow) : { id: rowId };
+ 					const merged = {
+ 						...decodedCurrent,
+-						...normalizedModified
++						...fieldsToWrite
+ 					};
+ 					delete merged.id;
+-					const encoded = await encodeBaseRow(omitUndefined(merged), toRecordKeyString(mutationId));
++					const encoded = await encodeBaseRow(toSurrealFields(omitUndefined(merged)), toRecordKeyString(rowId));
+ 					await db.update(mutationId).merge(encoded);
+ 					writeUtils.writeUpsert?.(normalizeRow({
+ 						...decodedCurrent,
+@@ -1233,8 +1753,8 @@ function modernSurrealCollectionOptions(config) {
+ 					}));
  					continue;
  				}
- 				const id = toRecordKeyString(mutationId);
+-				const id = toRecordKeyString(mutationId);
 -				const doc = getDoc(id);
++				const id = toRecordKeyString(rowId);
 +				const doc = await getDoc(id);
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "update",
-@@ -1262,7 +1272,7 @@ function modernSurrealCollectionOptions(config) {
- 					writeUtils.writeDelete?.(`${tableName}:${id}`);
+@@ -1255,18 +1775,20 @@ function modernSurrealCollectionOptions(config) {
+ 			const writeUtils = getWriteUtils(params.collection.utils);
+ 			for (const mutation of params.transaction.mutations) {
+ 				if (mutation.type !== "delete") continue;
+-				const mutationId = normalizeMutationId(mutation.key);
+-				const id = toRecordKeyString(mutationId);
++				const mutationKey = mutation.key;
++				const mutationId = toSurrealId(mutationKey);
++				const rowId = toRowId(mutationKey);
++				const id = toRecordKeyString(rowId);
+ 				if (!crdtEnabled) {
+ 					await db.delete(mutationId);
+-					writeUtils.writeDelete?.(`${tableName}:${id}`);
++					writeDeleteIfPresent(writeUtils, deleteKeyFor(rowId));
  					continue;
  				}
 -				const doc = getDoc(id);
@@ -86,7 +1281,21 @@ index 29eeb4d..80b1aa6 100644
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "delete",
-@@ -1297,7 +1307,7 @@ function modernSurrealCollectionOptions(config) {
+-					value: { id: mutationId }
++					value: { id: rowId }
+ 				};
+ 				applyCrdtLocalChange(doc, localChange);
+ 				const bytes = doc.export({
+@@ -1274,7 +1796,7 @@ function modernSurrealCollectionOptions(config) {
+ 					from: vv
+ 				});
+ 				await persistCrdtUpdate(id, bytes, localChange);
+-				writeUtils.writeDelete?.(`${tableName}:${id}`);
++				writeDeleteIfPresent(writeUtils, deleteKeyFor(rowId));
+ 			}
+ 		})
+ 	});
+@@ -1297,7 +1819,7 @@ function modernSurrealCollectionOptions(config) {
  					const updates = await queryRows(db, `SELECT * FROM type::table($table) ORDER BY ts ASC;`, { table: updatesTableName });
  					for (const update of updates) {
  						const id = idFromDocRef(update.doc);
@@ -95,18 +1304,1252 @@ index 29eeb4d..80b1aa6 100644
  						const bytes = await decodeUpdateBytes(update, "update");
  						if (!bytes.byteLength) continue;
  						doc.import(bytes);
+@@ -1341,7 +1863,7 @@ function modernSurrealCollectionOptions(config) {
+ function surrealCollectionOptions(config) {
+ 	return modernSurrealCollectionOptions(config);
+ }
+-function persistedSurrealCollectionOptions(config) {
++function createPersistedOptions(config) {
+ 	const { persistence, schemaVersion, ...surrealConfig } = config;
+ 	const options = modernSurrealCollectionOptions(surrealConfig);
+ 	return (0, _tanstack_db_sqlite_persistence_core.persistedCollectionOptions)({
+@@ -1350,6 +1872,9 @@ function persistedSurrealCollectionOptions(config) {
+ 		...options
+ 	});
+ }
++function persistedSurrealCollectionOptions(config) {
++	return createPersistedOptions(config);
++}
+ exports.WebCryptoAESGCM = WebCryptoAESGCM;
+ exports.applyLoroJsonChange = applyLoroJsonChange;
+ exports.applyLoroRichtextChange = applyLoroRichtextChange;
+diff --git a/dist/index.d.cts b/dist/index.d.cts
+index fd0f25c5fee73b3e59008e8462a04ae957ce1665..caaf1cc3e7f184a7dc7c852a11201d1c54f73616 100644
+--- a/dist/index.d.cts
++++ b/dist/index.d.cts
+@@ -1,14 +1,9 @@
+ import { StandardSchemaV1 } from "@standard-schema/spec";
+ import { CollectionConfig, LoadSubsetOptions, OperationConfig, Transaction, UtilsRecord } from "@tanstack/db";
+-import { RecordId, Surreal, Table } from "surrealdb";
++import { RecordId, Surreal, Table, Value } from "surrealdb";
+ import { PersistedCollectionPersistence } from "@tanstack/db-sqlite-persistence-core";
+ import { QueryClient } from "@tanstack/query-core";
+ import { LoroDoc } from "loro-crdt";
+-type MutationInput<T extends {
+-  id: string | RecordId;
+-}> = Omit<T, 'id'> & {
+-  id?: T['id'];
+-};
+ export type EncryptInput = {
+   plaintext: Bytes;
+   aad?: Bytes;
+@@ -63,6 +58,26 @@ export declare class WebCryptoAESGCM implements CryptoProvider {
+   encrypt(input: EncryptInput): Promise<EncryptedEnvelope>;
+   decrypt({ envelope, aad }: DecryptInput): Promise<Bytes>;
+ }
++type SchemaKind = {
++  kind?: unknown;
++  item?: SchemaKind;
++  variants?: readonly SchemaKind[];
++  fields?: readonly {
++    name: string;
++    kind: SchemaKind;
++  }[];
++};
++/** A table from a SurrealKit schema document (`surrealkit compile`). */
++type SurrealSchemaTable = {
++  name: string;
++  type?: {
++    kind?: unknown;
++  };
++  fields?: readonly {
++    path: readonly string[];
++    kind?: SchemaKind;
++  }[];
++};
+ export type Bytes = Uint8Array;
+ export type WithId<T> = T & {
+   id: string | RecordId;
+@@ -132,7 +147,28 @@ export type SurrealCollectionOptions<T extends object> = Omit<CollectionConfig<T
+   e2ee?: SurrealE2EEOptions;
+   crdt?: SurrealCRDTOptions<T>;
+   onError?: (error: unknown) => void;
++  /**
++   * How record ids are represented in the rows TanStack DB sees.
++   *
++   * - `'native'` (default): `RecordId` instances.
++   * - `'string'`: plain strings in SurrealQL form (`RecordId#toString()`,
++   *   e.g. `user:abc`, `user:42`, `user:⟨42⟩`), so they compare by value in
++   *   `eq(...)` and hash in `useLiveQuery`. The row `id` and the record-link
++   *   fields in `tables` are converted back to record ids when sent to
++   *   SurrealDB. Pass a row type with `RecordId` fields (such as a generated
++   *   one) to require `tables`, or a row type whose `id` is already a `string`.
++   */
++  recordIds?: [T] extends [{
++    id: string;
++  }] ? RecordIdMode : 'native';
++  /**
++   * The `tables` of a SurrealKit schema document (`surrealkit compile`), used
++   * by `recordIds: 'string'` to find this table's record-link fields. Use a
++   * named import so the document's access definitions stay out of the bundle.
++   */
++  tables?: readonly SurrealSchemaTable[];
+ };
++export type RecordIdMode = 'native' | 'string';
+ export type PersistedSurrealCollectionOptions<T extends object> = SurrealCollectionOptions<T> & {
+   persistence: PersistedCollectionPersistence;
+   schemaVersion?: number;
+@@ -148,6 +184,42 @@ export type SurrealCollectionOptionsReturn<T extends {
+   }, T>;
+   utils: UtilsRecord;
+ };
++type MutationInput<T extends {
++  id: string | RecordId;
++}> = Omit<T, 'id'> & {
++  id?: T['id'];
++};
++type AnyRecordId = RecordId<any, any, any>;
++type OpaqueValue = Value | Date | ArrayBuffer | ArrayBufferView | Map<unknown, unknown> | Set<unknown> | ((...args: never[]) => unknown);
++/** `T` with every `RecordId`, at any depth, replaced by its string form. */
++type StringRecordIds<T> = T extends AnyRecordId ? string : T extends OpaqueValue ? T : T extends readonly (infer Item)[] ? StringRecordIds<Item>[] : T extends object ? { [K in keyof T]: StringRecordIds<T[K]>; } : T;
++type Decrement = [never, 0, 1, 2, 3, 4];
++type RecordPathsOf<V, Path extends string, Depth extends number> = [Depth] extends [never] ? never : V extends AnyRecordId ? Path : V extends OpaqueValue ? never : V extends readonly (infer Item)[] ? RecordPathsOf<Item, Path, Depth> : V extends object ? { [K in keyof V & string]-?: RecordPathsOf<V[K], `${Path}.${K}`, Decrement[Depth]>; }[keyof V & string] : never;
++/**
++ * Dot paths of the record-link fields of `T`, down to five levels. `id`, `in`
++ * and `out` are left out because the adapter handles them itself.
++ */
++type RecordFieldPath<T> = { [K in Exclude<keyof T & string, 'id' | 'in' | 'out'>]-?: RecordPathsOf<T[K], K, 4>; }[Exclude<keyof T & string, 'id' | 'in' | 'out'>];
++/** Requires SurrealKit's `tables` when `T` has record-link fields. */
++type RequiredSchemaTables<T> = [RecordFieldPath<T>] extends [never] ? {
++  tables?: readonly SurrealSchemaTable[];
++} : {
++  tables: readonly SurrealSchemaTable[];
++};
++/** The row TanStack DB sees for `T` in `recordIds: 'string'` mode. */
++type StringRecordRow<T> = StringRecordIds<T> & {
++  id: string;
++  sync_deleted?: boolean;
++  updated_at?: Date | number | string;
++};
++/** Options for a row type with `RecordId` fields in `recordIds: 'string'` mode. */
++type StringRecordCollectionOptions<T extends object> = Omit<SurrealCollectionOptions<StringRecordRow<T>>, 'recordIds' | 'tables'> & {
++  recordIds: 'string';
++} & RequiredSchemaTables<T>;
++type PersistedStringRecordCollectionOptions<T extends object> = StringRecordCollectionOptions<T> & {
++  persistence: PersistedCollectionPersistence;
++  schemaVersion?: number;
++};
+ interface CRDTProfileAdapter<T extends object> {
+   materialize: (doc: LoroDoc, id: string) => T;
+   applyLocalChange: (doc: LoroDoc, change: LocalChange<T>) => void;
+@@ -159,11 +231,15 @@ export declare const materializeLoroRichtext: <T extends object>(doc: LoroDoc, i
+ export declare const applyLoroRichtextChange: <T extends object>(doc: LoroDoc, change: LocalChange<T>) => void;
+ export declare const createLoroProfile: <T extends object = Record<string, unknown>>(profile: LoroProfile) => CRDTProfileAdapter<T>;
+ export declare const toRecordKeyString: (rid: RecordId | string) => string;
+-export declare function surrealCollectionOptions<T extends SyncedTable<object>>(config: SurrealCollectionOptions<T>): CollectionConfig<T, string, StandardSchemaV1<MutationInput<T>, T>, UtilsRecord> & {
++type SurrealCollectionResult<T extends SyncedTable<object>> = CollectionConfig<T, string, StandardSchemaV1<MutationInput<T>, T>, UtilsRecord> & {
+   schema: StandardSchemaV1<MutationInput<T>, T>;
+   utils: UtilsRecord;
+ };
+-export declare function persistedSurrealCollectionOptions<T extends SyncedTable<object>>(config: PersistedSurrealCollectionOptions<T>): CollectionConfig<T extends object ? T : Record<string, unknown>, string, StandardSchemaV1<Omit<T, "id"> & {
++export declare function surrealCollectionOptions<T extends SyncedTable<object> & {
++  id: RecordId;
++}>(config: StringRecordCollectionOptions<T>): SurrealCollectionResult<StringRecordRow<T>>;
++export declare function surrealCollectionOptions<T extends SyncedTable<object>>(config: SurrealCollectionOptions<T>): SurrealCollectionResult<T>;
++declare function createPersistedOptions<T extends SyncedTable<object>>(config: PersistedSurrealCollectionOptions<T>): CollectionConfig<T extends object ? T : Record<string, unknown>, string, StandardSchemaV1<Omit<T, "id"> & {
+   id?: T['id'];
+ }, T>, UtilsRecord> & {
+   persistence: import("@tanstack/db-sqlite-persistence-core").PersistedCollectionPersistence & {
+@@ -174,9 +250,13 @@ export declare function persistedSurrealCollectionOptions<T extends SyncedTable<
+     id?: T['id'];
+   }, T>;
+ };
++export declare function persistedSurrealCollectionOptions<T extends SyncedTable<object> & {
++  id: RecordId;
++}>(config: PersistedStringRecordCollectionOptions<T>): ReturnType<typeof createPersistedOptions<StringRecordRow<T>>>;
++export declare function persistedSurrealCollectionOptions<T extends SyncedTable<object>>(config: PersistedSurrealCollectionOptions<T>): ReturnType<typeof createPersistedOptions<T>>;
+ declare module '@tanstack/db' {
+   interface Collection<T extends object = Record<string, unknown>, TKey extends string | number = string | number, TUtils extends UtilsRecord = UtilsRecord, TSchema extends StandardSchemaV1 = StandardSchemaV1, TInsertInput extends object = T> {
+     delete(keys: Array<TKey | RecordId | string> | TKey | RecordId | string, config?: OperationConfig): Transaction<Record<string, never>>;
+   }
+ }
+-export {};
+\ No newline at end of file
++export type { SurrealSchemaTable };
+\ No newline at end of file
+diff --git a/dist/index.d.mts b/dist/index.d.mts
+index f239d858e8d8d88ac67aeb3681cf563940ac4124..39fd0c481889ffddc3da7c34e9703741aff76fd3 100644
+--- a/dist/index.d.mts
++++ b/dist/index.d.mts
+@@ -1,14 +1,9 @@
+ import { PersistedCollectionPersistence } from "@tanstack/db-sqlite-persistence-core";
+-import { LoroDoc } from "loro-crdt";
+-import { RecordId, Surreal, Table } from "surrealdb";
++import { RecordId, Surreal, Table, Value } from "surrealdb";
+ import { QueryClient } from "@tanstack/query-core";
+ import { CollectionConfig, LoadSubsetOptions, OperationConfig, Transaction, UtilsRecord } from "@tanstack/db";
+ import { StandardSchemaV1 } from "@standard-schema/spec";
+-type MutationInput<T extends {
+-  id: string | RecordId;
+-}> = Omit<T, 'id'> & {
+-  id?: T['id'];
+-};
++import { LoroDoc } from "loro-crdt";
+ export type EncryptInput = {
+   plaintext: Bytes;
+   aad?: Bytes;
+@@ -63,6 +58,26 @@ export declare class WebCryptoAESGCM implements CryptoProvider {
+   encrypt(input: EncryptInput): Promise<EncryptedEnvelope>;
+   decrypt({ envelope, aad }: DecryptInput): Promise<Bytes>;
+ }
++type SchemaKind = {
++  kind?: unknown;
++  item?: SchemaKind;
++  variants?: readonly SchemaKind[];
++  fields?: readonly {
++    name: string;
++    kind: SchemaKind;
++  }[];
++};
++/** A table from a SurrealKit schema document (`surrealkit compile`). */
++type SurrealSchemaTable = {
++  name: string;
++  type?: {
++    kind?: unknown;
++  };
++  fields?: readonly {
++    path: readonly string[];
++    kind?: SchemaKind;
++  }[];
++};
+ export type Bytes = Uint8Array;
+ export type WithId<T> = T & {
+   id: string | RecordId;
+@@ -132,7 +147,28 @@ export type SurrealCollectionOptions<T extends object> = Omit<CollectionConfig<T
+   e2ee?: SurrealE2EEOptions;
+   crdt?: SurrealCRDTOptions<T>;
+   onError?: (error: unknown) => void;
++  /**
++   * How record ids are represented in the rows TanStack DB sees.
++   *
++   * - `'native'` (default): `RecordId` instances.
++   * - `'string'`: plain strings in SurrealQL form (`RecordId#toString()`,
++   *   e.g. `user:abc`, `user:42`, `user:⟨42⟩`), so they compare by value in
++   *   `eq(...)` and hash in `useLiveQuery`. The row `id` and the record-link
++   *   fields in `tables` are converted back to record ids when sent to
++   *   SurrealDB. Pass a row type with `RecordId` fields (such as a generated
++   *   one) to require `tables`, or a row type whose `id` is already a `string`.
++   */
++  recordIds?: [T] extends [{
++    id: string;
++  }] ? RecordIdMode : 'native';
++  /**
++   * The `tables` of a SurrealKit schema document (`surrealkit compile`), used
++   * by `recordIds: 'string'` to find this table's record-link fields. Use a
++   * named import so the document's access definitions stay out of the bundle.
++   */
++  tables?: readonly SurrealSchemaTable[];
+ };
++export type RecordIdMode = 'native' | 'string';
+ export type PersistedSurrealCollectionOptions<T extends object> = SurrealCollectionOptions<T> & {
+   persistence: PersistedCollectionPersistence;
+   schemaVersion?: number;
+@@ -148,6 +184,42 @@ export type SurrealCollectionOptionsReturn<T extends {
+   }, T>;
+   utils: UtilsRecord;
+ };
++type MutationInput<T extends {
++  id: string | RecordId;
++}> = Omit<T, 'id'> & {
++  id?: T['id'];
++};
++type AnyRecordId = RecordId<any, any, any>;
++type OpaqueValue = Value | Date | ArrayBuffer | ArrayBufferView | Map<unknown, unknown> | Set<unknown> | ((...args: never[]) => unknown);
++/** `T` with every `RecordId`, at any depth, replaced by its string form. */
++type StringRecordIds<T> = T extends AnyRecordId ? string : T extends OpaqueValue ? T : T extends readonly (infer Item)[] ? StringRecordIds<Item>[] : T extends object ? { [K in keyof T]: StringRecordIds<T[K]>; } : T;
++type Decrement = [never, 0, 1, 2, 3, 4];
++type RecordPathsOf<V, Path extends string, Depth extends number> = [Depth] extends [never] ? never : V extends AnyRecordId ? Path : V extends OpaqueValue ? never : V extends readonly (infer Item)[] ? RecordPathsOf<Item, Path, Depth> : V extends object ? { [K in keyof V & string]-?: RecordPathsOf<V[K], `${Path}.${K}`, Decrement[Depth]>; }[keyof V & string] : never;
++/**
++ * Dot paths of the record-link fields of `T`, down to five levels. `id`, `in`
++ * and `out` are left out because the adapter handles them itself.
++ */
++type RecordFieldPath<T> = { [K in Exclude<keyof T & string, 'id' | 'in' | 'out'>]-?: RecordPathsOf<T[K], K, 4>; }[Exclude<keyof T & string, 'id' | 'in' | 'out'>];
++/** Requires SurrealKit's `tables` when `T` has record-link fields. */
++type RequiredSchemaTables<T> = [RecordFieldPath<T>] extends [never] ? {
++  tables?: readonly SurrealSchemaTable[];
++} : {
++  tables: readonly SurrealSchemaTable[];
++};
++/** The row TanStack DB sees for `T` in `recordIds: 'string'` mode. */
++type StringRecordRow<T> = StringRecordIds<T> & {
++  id: string;
++  sync_deleted?: boolean;
++  updated_at?: Date | number | string;
++};
++/** Options for a row type with `RecordId` fields in `recordIds: 'string'` mode. */
++type StringRecordCollectionOptions<T extends object> = Omit<SurrealCollectionOptions<StringRecordRow<T>>, 'recordIds' | 'tables'> & {
++  recordIds: 'string';
++} & RequiredSchemaTables<T>;
++type PersistedStringRecordCollectionOptions<T extends object> = StringRecordCollectionOptions<T> & {
++  persistence: PersistedCollectionPersistence;
++  schemaVersion?: number;
++};
+ interface CRDTProfileAdapter<T extends object> {
+   materialize: (doc: LoroDoc, id: string) => T;
+   applyLocalChange: (doc: LoroDoc, change: LocalChange<T>) => void;
+@@ -159,11 +231,15 @@ export declare const materializeLoroRichtext: <T extends object>(doc: LoroDoc, i
+ export declare const applyLoroRichtextChange: <T extends object>(doc: LoroDoc, change: LocalChange<T>) => void;
+ export declare const createLoroProfile: <T extends object = Record<string, unknown>>(profile: LoroProfile) => CRDTProfileAdapter<T>;
+ export declare const toRecordKeyString: (rid: RecordId | string) => string;
+-export declare function surrealCollectionOptions<T extends SyncedTable<object>>(config: SurrealCollectionOptions<T>): CollectionConfig<T, string, StandardSchemaV1<MutationInput<T>, T>, UtilsRecord> & {
++type SurrealCollectionResult<T extends SyncedTable<object>> = CollectionConfig<T, string, StandardSchemaV1<MutationInput<T>, T>, UtilsRecord> & {
+   schema: StandardSchemaV1<MutationInput<T>, T>;
+   utils: UtilsRecord;
+ };
+-export declare function persistedSurrealCollectionOptions<T extends SyncedTable<object>>(config: PersistedSurrealCollectionOptions<T>): CollectionConfig<T extends object ? T : Record<string, unknown>, string, StandardSchemaV1<Omit<T, "id"> & {
++export declare function surrealCollectionOptions<T extends SyncedTable<object> & {
++  id: RecordId;
++}>(config: StringRecordCollectionOptions<T>): SurrealCollectionResult<StringRecordRow<T>>;
++export declare function surrealCollectionOptions<T extends SyncedTable<object>>(config: SurrealCollectionOptions<T>): SurrealCollectionResult<T>;
++declare function createPersistedOptions<T extends SyncedTable<object>>(config: PersistedSurrealCollectionOptions<T>): CollectionConfig<T extends object ? T : Record<string, unknown>, string, StandardSchemaV1<Omit<T, "id"> & {
+   id?: T['id'];
+ }, T>, UtilsRecord> & {
+   persistence: import("@tanstack/db-sqlite-persistence-core").PersistedCollectionPersistence & {
+@@ -174,9 +250,13 @@ export declare function persistedSurrealCollectionOptions<T extends SyncedTable<
+     id?: T['id'];
+   }, T>;
+ };
++export declare function persistedSurrealCollectionOptions<T extends SyncedTable<object> & {
++  id: RecordId;
++}>(config: PersistedStringRecordCollectionOptions<T>): ReturnType<typeof createPersistedOptions<StringRecordRow<T>>>;
++export declare function persistedSurrealCollectionOptions<T extends SyncedTable<object>>(config: PersistedSurrealCollectionOptions<T>): ReturnType<typeof createPersistedOptions<T>>;
+ declare module '@tanstack/db' {
+   interface Collection<T extends object = Record<string, unknown>, TKey extends string | number = string | number, TUtils extends UtilsRecord = UtilsRecord, TSchema extends StandardSchemaV1 = StandardSchemaV1, TInsertInput extends object = T> {
+     delete(keys: Array<TKey | RecordId | string> | TKey | RecordId | string, config?: OperationConfig): Transaction<Record<string, never>>;
+   }
+ }
+-export {};
+\ No newline at end of file
++export type { SurrealSchemaTable };
+\ No newline at end of file
 diff --git a/dist/index.mjs b/dist/index.mjs
-index 1bc88c2..744f8c7 100644
+index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..f8d53001f3a4da1d502ecebec1e471247ca949f6 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
-@@ -1,6 +1,5 @@
+@@ -1,9 +1,8 @@
  import { persistedCollectionOptions } from "@tanstack/db-sqlite-persistence-core";
- import { queryCollectionOptions } from "@tanstack/query-db-collection";
+-import { queryCollectionOptions } from "@tanstack/query-db-collection";
 -import { LoroDoc } from "loro-crdt";
- import { Features, RecordId, Table } from "surrealdb";
+-import { Features, RecordId, Table } from "surrealdb";
++import { DeleteOperationItemNotFoundError, queryCollectionOptions } from "@tanstack/query-db-collection";
++import { Features, RecordId, StringRecordId, Table } from "surrealdb";
  import { hashKey } from "@tanstack/query-core";
- import { parseOrderByExpression, parseWhereExpression } from "@tanstack/db";
-@@ -784,6 +783,14 @@ var WebCryptoAESGCM = class WebCryptoAESGCM {
+-import { parseOrderByExpression, parseWhereExpression } from "@tanstack/db";
++import { compileSingleRowExpression, parseOrderByExpression, parseWhereExpression, toBooleanPredicate } from "@tanstack/db";
+ // src/crdt.ts
+ const toRecord = (value) => typeof value === "object" && value !== null ? value : {};
+ const materializeLoroJson = (doc, id) => {
+@@ -249,11 +248,97 @@ const toRecordId = (tableName, id) => {
+ 	const key = normalized.startsWith(prefixed) ? normalized.slice(prefixed.length) : normalized;
+ 	return new RecordId(tableName, key);
+ };
++// src/internal/records.ts
++const firstRow = (result) => {
++	if (!result) return void 0;
++	if (Array.isArray(result)) return result[0];
++	return result;
++};
++const toRecordArray = (rows) => {
++	if (!rows) return [];
++	return Array.isArray(rows) ? rows : [rows];
++};
++const omitUndefined = (obj) => Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== void 0));
++const isPlainObject = (value) => typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype;
++async function queryRows(db, sql, bindings) {
++	const result = await db.query(sql, bindings ?? {});
++	if (Array.isArray(result)) {
++		const first = result[0];
++		if (Array.isArray(first)) return first;
++	}
++	return [];
++}
++// src/internal/string-ids.ts
++/**
++* Lossless SurrealQL string form of a record id (`RecordId#toString()`),
++* e.g. `user:abc`, `user:42` (number key) or `user:⟨42⟩` (string key).
++*/
++const recordIdToString = (value) => {
++	if (value instanceof RecordId) return value.toString();
++	if (isCrossRuntimeRecordIdObject(value)) return String(value.toString());
++};
++/** Deeply replaces every record id with its lossless string form. */
++const stringifyRecordIdsDeep = (value) => {
++	const asString = recordIdToString(value);
++	if (asString !== void 0) return asString;
++	if (Array.isArray(value)) return value.map((item) => stringifyRecordIdsDeep(item));
++	if (value instanceof Set) return new Set([...value].map((item) => stringifyRecordIdsDeep(item)));
++	if (isPlainObject(value)) {
++		const out = {};
++		for (const [k, v] of Object.entries(value)) out[k] = stringifyRecordIdsDeep(v);
++		return out;
++	}
++	return value;
++};
++/**
++* Resolves a row id to the string form used as the TanStack DB key.
++* Strings already prefixed with the table are kept as-is; bare keys are
++* treated as string keys of `tableName`.
++*/
++const toTableRecordIdString = (tableName, id) => {
++	const asString = recordIdToString(id);
++	if (asString !== void 0) return asString;
++	if (id instanceof StringRecordId) return id.toString();
++	const raw = String(id);
++	const escapedPrefix = new RecordId(tableName, "x").toString().slice(0, -1);
++	if (raw.startsWith(escapedPrefix) || raw.startsWith(`${tableName}:`)) return raw;
++	return new RecordId(tableName, raw).toString();
++};
++/** Converts a record id string back into a value SurrealDB parses as a record id. */
++const toSurrealRecordId = (value) => {
++	if (typeof value === "string") return new StringRecordId(value);
++	if (Array.isArray(value)) return value.map(toSurrealRecordId);
++	if (value instanceof Set) return new Set([...value].map(toSurrealRecordId));
++	return value;
++};
++const convertPath = (value, path, convert) => {
++	if (Array.isArray(value) && path.length > 0) return value.map((item) => convertPath(item, path, convert));
++	if (value instanceof Set && path.length > 0) return new Set([...value].map((item) => convertPath(item, path, convert)));
++	if (path.length === 0) return convert(value);
++	if (!isPlainObject(value)) return value;
++	const [head, ...rest] = path;
++	if (!(head in value)) return value;
++	return {
++		...value,
++		[head]: convertPath(value[head], rest, convert)
++	};
++};
++/**
++* Converts the configured record-link fields (dot paths) of a row from
++* strings to record ids before the row is sent to SurrealDB.
++*/
++const recordFieldsToSurreal = (row, recordFields) => {
++	let out = row;
++	for (const field of recordFields) out = convertPath(out, field.split("."), toSurrealRecordId);
++	return out;
++};
+ // src/internal/collection-identity.ts
+ const SURREAL_COLLECTION_ID_PREFIX = "surreal";
+ const patchedCollections = /* @__PURE__ */ new WeakSet();
+ const normalizeDeleteKeyAgainstState = (state, key) => {
+ 	if (state.has(key)) return key;
++	const asString = recordIdToString(key);
++	if (asString !== void 0 && state.has(asString)) return asString;
+ 	const canonical = asCanonicalRecordIdString(key);
+ 	if (!canonical) return key;
+ 	return state.has(canonical) ? canonical : key;
+@@ -339,53 +424,250 @@ const stripEnvelopeFields = (value) => {
+ 	for (const key of ENVELOPE_FIELDS) delete copy[key];
+ 	return copy;
+ };
+-// src/internal/records.ts
+-const firstRow = (result) => {
+-	if (!result) return void 0;
+-	if (Array.isArray(result)) return result[0];
+-	return result;
++// src/table.ts
++const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
++const toFieldPath = (value) => {
++	if (!Array.isArray(value)) throw new Error("Expected a field path array in where expression.");
++	return value;
+ };
+-const toRecordArray = (rows) => {
+-	if (!rows) return [];
+-	return Array.isArray(rows) ? rows : [rows];
++const quoteIdentifier = (segment) => {
++	if (IDENTIFIER_RE.test(segment)) return segment;
++	return `\`${segment.replaceAll("`", "\\`")}\``;
+ };
+-const omitUndefined = (obj) => Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== void 0));
+-const isPlainObject = (value) => typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype;
+-async function queryRows(db, sql, bindings) {
+-	const result = await db.query(sql, bindings ?? {});
+-	if (Array.isArray(result)) {
+-		const first = result[0];
+-		if (Array.isArray(first)) return first;
++const formatFieldPath = (path) => {
++	let out = "";
++	for (const segment of path) {
++		if (typeof segment === "number") {
++			out += `[${segment}]`;
++			continue;
++		}
++		const next = quoteIdentifier(segment);
++		out = out ? `${out}.${next}` : next;
+ 	}
+-	return [];
+-}
+-// src/internal/schema.ts
+-const TEMP_ID_PREFIX = "__temp__";
+-const createTempRecordId = (tableName) => {
+-	const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+-	return new RecordId(tableName, `${TEMP_ID_PREFIX}${suffix}`);
++	return out;
+ };
+-const isTempId = (id, tableName) => {
+-	const normalized = toRecordIdString(id);
+-	return (normalized.startsWith(`${tableName}:`) ? normalized.slice(tableName.length + 1) : normalized).startsWith(TEMP_ID_PREFIX);
++const isReferencePathCandidate = (value) => Array.isArray(value) && value.length > 0 && typeof value[0] === "string" && value.every((segment) => typeof segment === "string" || typeof segment === "number");
++const mapRelationPath = (path, relation) => {
++	if (!relation) return path;
++	if (path[0] === "from") return ["in", ...path.slice(1)];
++	if (path[0] === "to") return ["out", ...path.slice(1)];
++	return path;
+ };
+-function createInsertSchema(tableName) {
+-	return { "~standard": {
+-		version: 1,
+-		vendor: "tanstack-db-surrealdb",
+-		validate: (value) => {
+-			if (!value || typeof value !== "object" || Array.isArray(value)) return { issues: [{ message: "Insert data must be an object." }] };
+-			const data = normalizeRecordIdLikeFields({ ...value });
+-			if (!data.id) data.id = createTempRecordId(tableName);
+-			return { value: data };
++const normalizeFilterValue = (value) => {
++	if (Array.isArray(value)) return value.map((item) => normalizeFilterValue(item));
++	const native = toNativeRecordIdLikeValue(value);
++	if (native !== value) return native;
++	if (value && typeof value === "object") return normalizeRecordIdLikeValue(value);
++	return normalizeRecordIdLikeValue(value);
++};
++const toSqlFragment = (value) => {
++	if (typeof value === "object" && value !== null && "sql" in value && typeof value.sql === "string") return value;
++	throw new Error("Unsupported where expression node.");
++};
++const joinLogical = (op, args) => {
++	const parts = args.map(toSqlFragment).map((frag) => frag.sql);
++	if (parts.length === 0) return { sql: op === "AND" ? "true" : "false" };
++	if (parts.length === 1) return { sql: parts[0] };
++	return { sql: parts.map((part) => `(${part})`).join(` ${op} `) };
++};
++const filterValueFor = (table, options, fieldPath, value) => {
++	if (!options.recordFields) return normalizeFilterValue(value);
++	const path = mapRelationPath(toFieldPath(fieldPath), table.relation);
++	return options.recordFields.has(path.join(".")) ? toSurrealRecordId(value) : value;
++};
++const whereSqlFrom = (table, expr, bind, scope, options = {}) => {
++	const filterValue = (fieldPath, value) => filterValueFor(table, options, fieldPath, value);
++	const fieldSql = (fieldPath) => {
++		const field = formatFieldPath(mapRelationPath(toFieldPath(fieldPath), table.relation));
++		return scope ? `${scope}.${field}` : field;
++	};
++	const comparison = (fieldPath, op, value) => {
++		const field = fieldSql(fieldPath);
++		if (value === void 0) {
++			if (op === "=") return { sql: `${field} IS NONE` };
++			if (op === "!=") return { sql: `${field} IS NOT NONE` };
++			throw new Error(`Cannot compare field '${field}' with undefined using '${op}'.`);
++		}
++		if (isReferencePathCandidate(value)) throw new Error("Got a field reference on the right side of a where comparison. Pass a concrete value.");
++		return { sql: `${field} ${op} ${bind(filterValue(fieldPath, value))}` };
++	};
++	const fragment = parseWhereExpression(expr, {
++		handlers: {
++			and: (...args) => joinLogical("AND", args),
++			or: (...args) => joinLogical("OR", args),
++			not: (arg) => ({ sql: `NOT (${toSqlFragment(arg).sql})` }),
++			eq: (field, value) => comparison(field, "=", value),
++			gt: (field, value) => comparison(field, ">", value),
++			gte: (field, value) => comparison(field, ">=", value),
++			lt: (field, value) => comparison(field, "<", value),
++			lte: (field, value) => comparison(field, "<=", value),
++			like: (field, value) => comparison(field, "LIKE", value),
++			ilike: (field, value) => {
++				return { sql: `string::lower(${fieldSql(field)}) LIKE string::lower(${bind(filterValue(field, value))})` };
++			},
++			in: (field, value) => {
++				const f = fieldSql(field);
++				if (Array.isArray(value) && value.length === 0) return { sql: "false" };
++				return { sql: `${f} IN ${bind(filterValue(field, value))}` };
++			},
++			isNull: (field) => ({ sql: `${fieldSql(field)} IS NULL` }),
++			isUndefined: (field) => ({ sql: `${fieldSql(field)} IS NONE` })
+ 		},
+-		types: void 0
+-	} };
++		onUnknownOperator: (op) => {
++			throw new Error(`Unsupported where operator '${op}' for SurrealQL translation.`);
++		}
++	});
++	if (!fragment) return "";
++	return fragment.sql;
++};
++const subsetFilters = (subset) => [subset?.where, subset?.cursor?.whereFrom].filter((expr) => Boolean(expr));
++const filterSqlFrom = (table, subset, bind, scope, options = {}) => subsetFilters(subset).map((expr) => whereSqlFrom(table, expr, bind, scope, options)).filter(Boolean);
++const isOrdered = (subset) => Boolean(subset?.orderBy?.length) || typeof subset?.limit === "number" || typeof subset?.offset === "number";
++const subsetOrderOf = (table, subset) => {
++	if (!isOrdered(subset)) return [];
++	const order = parseOrderByExpression(subset?.orderBy).map((clause) => ({
++		field: mapRelationPath(clause.field, table.relation),
++		direction: clause.direction
++	}));
++	if (!order.some((clause) => clause.field.length === 1 && clause.field[0] === "id")) order.push({
++		field: ["id"],
++		direction: "asc"
++	});
++	return order;
++};
++const readFieldPath = (row, path) => {
++	let value = row;
++	for (const segment of path) {
++		if (value === null || typeof value !== "object") return void 0;
++		value = value[segment];
++	}
++	return value;
++};
++const windowBoundaryOf = (table, subset, rows) => {
++	const limit = subset?.limit;
++	if (typeof limit !== "number" || rows.length === 0) return void 0;
++	if (rows.length < limit) return void 0;
++	const leading = subsetOrderOf(table, subset)[0];
++	if (!leading) return void 0;
++	const value = readFieldPath(rows[rows.length - 1], leading.field);
++	if (value === void 0 || value === null) return void 0;
++	return {
++		...leading,
++		value
++	};
++};
++const boundarySql = (table, boundary, bind, scope, options = {}) => {
++	const path = formatFieldPath(boundary.field);
++	const field = scope ? `${scope}.${path}` : path;
++	return `${field} ${boundary.direction === "desc" ? ">=" : "<="} ${bind(filterValueFor(table, options, boundary.field, boundary.value))} OR ${field} IS NONE OR ${field} IS NULL`;
++};
++const buildSubsetQuery = (table, subset, options = {}) => {
++	let paramIdx = 0;
++	const params = { table: table.name };
++	const nextParam = (value) => {
++		const key = `p${paramIdx++}`;
++		params[key] = value;
++		return `$${key}`;
++	};
++	const whereParts = filterSqlFrom(table, subset, nextParam, void 0, options);
++	const whereSql = whereParts.length ? ` WHERE ${whereParts.map((part) => `(${part})`).join(" AND ")}` : "";
++	const order = subsetOrderOf(table, subset);
++	return {
++		sql: `SELECT * FROM type::table($table)${whereSql}${order.length ? ` ORDER BY ${order.map((clause) => `${formatFieldPath(clause.field)} ${clause.direction.toUpperCase()}`).join(", ")}` : ""}${typeof subset?.limit === "number" ? ` LIMIT ${nextParam(subset.limit)}` : ""}${typeof subset?.offset === "number" ? ` START ${nextParam(subset.offset)}` : ""};`,
++		params
++	};
++};
++const buildLiveCondition = (table, subset, boundary, options = {}) => {
++	const scoped = (bind, scope) => {
++		const parts = filterSqlFrom(table, subset, bind, scope, options);
++		if (boundary) parts.push(boundarySql(table, boundary, bind, scope, options));
++		return parts;
++	};
++	if (!subsetFilters(subset).length && !boundary) return void 0;
++	const conjunction = (parts) => parts.map((part) => `(${part})`).join(" AND ");
++	return { toSQL: (ctx) => `(${conjunction(scoped(ctx.def))}) OR ($before IS NOT NONE AND ${conjunction(scoped(ctx.def, "$before"))})` };
++};
++function manageTable(db, config, subsetQueryOptions) {
++	const { name } = config;
++	const table = new Table(name);
++	const listAll = async () => {
++		return loadSubset();
++	};
++	const loadSubset = async (subset) => {
++		const { sql, params } = buildSubsetQuery(config, subset, subsetQueryOptions);
++		const [res] = await db.query(sql, params);
++		return res ?? [];
++	};
++	const create = async (data) => {
++		const id = data.id;
++		if (!id) {
++			const created = await db.create(table).content(data);
++			return firstRow(created);
++		}
++		const payload = { ...data };
++		payload.id = toRecordId(name, id);
++		const inserted = await db.insert(table, payload);
++		return firstRow(inserted);
++	};
++	const update = async (id, data) => {
++		const { id: _ignoredId, ...rest } = data;
++		await db.update(id).merge(rest);
++	};
++	const remove = async (id) => {
++		await db.delete(id);
++	};
++	const subscribe = (cb) => {
++		let killed = false;
++		let live;
++		const on = (msg) => {
++			const { action, value } = msg;
++			if (action === "KILLED") return;
++			if (action === "CREATE") cb({
++				type: "insert",
++				row: value
++			});
++			else if (action === "UPDATE") cb({
++				type: "update",
++				row: value
++			});
++			else if (action === "DELETE") cb({
++				type: "delete",
++				row: { id: value.id }
++			});
++		};
++		const start = async () => {
++			if (!db.isFeatureSupported(Features.LiveQueries)) return;
++			live = await db.live(table);
++			live.subscribe(on);
++		};
++		start();
++		return () => {
++			if (killed) return;
++			killed = true;
++			if (live) live.kill();
++		};
++	};
++	return {
++		listAll,
++		loadSubset,
++		create,
++		update,
++		remove,
++		softDelete: remove,
++		subscribe
++	};
+ }
+ // src/internal/subset-identity.ts
+ const subsetCacheKey = (subset) => {
+ 	const seen = /* @__PURE__ */ new WeakSet();
+-	return JSON.stringify(subset, (_key, value) => {
++	const demand = {
++		where: subset.where,
++		orderBy: subset.orderBy,
++		limit: subset.limit,
++		offset: subset.offset,
++		cursor: subset.cursor
++	};
++	return JSON.stringify(demand, (_key, value) => {
+ 		if (value instanceof Date) return value.toISOString();
+ 		if (value instanceof RecordId) return toRecordIdString(value);
+ 		if (typeof value === "bigint") return value.toString();
+@@ -497,6 +779,267 @@ const applyPreferredRecordIdIdentityToCollection = (ctx, preferredByCanonical) =
+ 	const indexes = collectionWithInternals._indexes?.indexes;
+ 	if (entries && indexes) for (const index of indexes.values()) index.build?.(entries);
+ };
++// src/internal/live-subsets.ts
++const compileMatcher = (options, whenUnknown) => {
++	const exprs = [options.where, options.cursor?.whereFrom].filter((expr) => Boolean(expr));
++	if (!exprs.length) return () => true;
++	try {
++		const evaluators = exprs.map((expr) => compileSingleRowExpression(expr));
++		return (row) => {
++			try {
++				return evaluators.every((evaluate) => toBooleanPredicate(evaluate(row)));
++			} catch {
++				return whenUnknown;
++			}
++		};
++	} catch {
++		return () => whenUnknown;
++	}
++};
++const comparable = (value) => {
++	if (value instanceof Date) return value.getTime();
++	return typeof value === "string" || typeof value === "number" || typeof value === "bigint" ? value : void 0;
++};
++const isBeforeBoundary = (value, boundary, direction) => {
++	const a = comparable(value);
++	const b = comparable(boundary);
++	if (a === void 0 || b === void 0 || typeof a !== typeof b) return false;
++	return direction === "asc" ? a < b : a > b;
++};
++function createLiveSubsets(config) {
++	const { db, table, tracker, loadRows, decode, writeRows, evict, syncedRows } = config;
++	const tableResource = new Table(table.name);
++	const entries = /* @__PURE__ */ new Map();
++	const report = (error) => config.onError?.(error);
++	const idOf = config.idOf ?? toRecordKeyString;
++	const liveSupported = async () => {
++		try {
++			await db.ready;
++			return db.isFeatureSupported?.(Features.LiveQueries) === true;
++		} catch {
++			return false;
++		}
++	};
++	const released = /* @__PURE__ */ new WeakSet();
++	let signedOut = false;
++	const release = (lives) => {
++		for (const live of lives) {
++			released.add(live);
++			live.kill().catch(() => void 0);
++		}
++	};
++	const enqueue = (entry, task) => {
++		const run = entry.chain.then(task);
++		entry.chain = run.catch(() => void 0);
++		return run;
++	};
++	const handle = async (entry, message) => {
++		if (entry.closed) return;
++		const raw = message.value;
++		if (!raw || raw.id === void 0) return;
++		const id = idOf(raw.id);
++		if (message.action === "DELETE") {
++			tracker.deleteId(id);
++			await evict([id]);
++			return;
++		}
++		const row = await decode(raw);
++		if (entry.matches(row)) {
++			tracker.addId(entry.key, id);
++			await writeRows([row]);
++			return;
++		}
++		tracker.removeId(entry.key, id);
++		if (tracker.has(id)) await writeRows([row]);
++		else await evict([id]);
++	};
++	const receive = (entry, live) => (message) => {
++		if (entry.closed || released.has(live)) return;
++		if (message.action === "KILLED") return;
++		if (entry.loading) {
++			entry.buffer.push(message);
++			return;
++		}
++		enqueue(entry, () => handle(entry, message)).catch(report);
++	};
++	const flush = (entry) => {
++		entry.loading = false;
++		for (const message of entry.buffer.splice(0)) enqueue(entry, () => handle(entry, message)).catch(report);
++	};
++	const openLive = async (entry, condition) => {
++		const builder = db.live(tableResource);
++		const live = await (condition ? builder.where(condition) : builder);
++		if (entry.closed) {
++			release([live]);
++			return;
++		}
++		live.subscribe(receive(entry, live));
++		return live;
++	};
++	const missingFromSnapshot = (entry, rows) => {
++		const { limit, offset } = entry.options;
++		if (offset || signedOut) return [];
++		const isFullWindow = typeof limit === "number" && rows.length >= limit;
++		const leading = subsetOrderOf(table, entry.options)[0];
++		const last = rows[rows.length - 1];
++		if (isFullWindow && (!leading || !last)) return [];
++		const inRange = (row) => !isFullWindow || isBeforeBoundary(readFieldPath(row, leading?.field ?? []), readFieldPath(last, leading?.field ?? []), leading?.direction ?? "asc");
++		const missing = [];
++		for (const row of syncedRows()) {
++			const id = idOf(row.id);
++			if (!tracker.has(id) && entry.surelyMatches(row) && inRange(row)) missing.push(id);
++		}
++		return missing;
++	};
++	const applySnapshot = async (entry, raws) => {
++		const rows = await Promise.all(raws.map((raw) => decode(raw)));
++		const previous = [...tracker.idsOf(entry.key)];
++		tracker.set(entry.key, new Set(rows.map((row) => idOf(row.id))));
++		await writeRows(rows);
++		const dropped = /* @__PURE__ */ new Set([...previous.filter((id) => !tracker.has(id)), ...missingFromSnapshot(entry, rows)]);
++		if (dropped.size) await evict([...dropped]);
++	};
++	const sync = async (entry) => {
++		const generation = ++entry.generation;
++		const stale = () => entry.closed || generation !== entry.generation;
++		const previous = entry.lives;
++		const opened = [];
++		entry.loading = true;
++		try {
++			const live = await liveSupported() ? await openLive(entry, buildLiveCondition(table, entry.options, void 0, config.queryOptions)) : void 0;
++			if (live) opened.push(live);
++			if (stale()) return release(opened.splice(0));
++			const rows = await loadRows(entry.options);
++			if (stale()) return release(opened.splice(0));
++			await enqueue(entry, () => applySnapshot(entry, rows));
++			const boundary = windowBoundaryOf(table, entry.options, rows);
++			if (live && boundary) {
++				const bounded = await openLive(entry, buildLiveCondition(table, entry.options, boundary, config.queryOptions));
++				if (bounded) {
++					opened.push(bounded);
++					release(opened.splice(0, 1));
++				}
++			}
++			if (stale()) return release(opened.splice(0));
++			entry.lives = opened.splice(0);
++			release(previous);
++		} catch (error) {
++			release(opened.splice(0));
++			throw error;
++		} finally {
++			if (generation === entry.generation) flush(entry);
++		}
++	};
++	const load = async (options) => {
++		const key = subsetCacheKey(options);
++		const existing = entries.get(key);
++		if (existing) {
++			if (options.refetch) existing.ready = sync(existing);
++			else existing.refs += 1;
++			return existing.ready;
++		}
++		const entry = {
++			key,
++			options,
++			refs: 1,
++			closed: false,
++			generation: 0,
++			lives: [],
++			loading: false,
++			buffer: [],
++			chain: Promise.resolve(),
++			ready: Promise.resolve(),
++			matches: compileMatcher(options, true),
++			surelyMatches: compileMatcher(options, false)
++		};
++		entries.set(key, entry);
++		tracker.set(key, /* @__PURE__ */ new Set());
++		entry.ready = sync(entry);
++		return entry.ready;
++	};
++	const unload = (options) => {
++		const key = subsetCacheKey(options);
++		const entry = entries.get(key);
++		if (!entry) return;
++		entry.refs -= 1;
++		if (entry.refs > 0) return;
++		entries.delete(key);
++		entry.closed = true;
++		entry.buffer.length = 0;
++		release(entry.lives.splice(0));
++		const ids = [...tracker.idsOf(key)];
++		tracker.delete(key);
++		const orphaned = ids.filter((id) => !tracker.has(id));
++		if (orphaned.length) evict(orphaned).catch(report);
++	};
++	const resync = async () => {
++		const active = [...entries.values()];
++		if (!active.length) return;
++		await Promise.all(active.map((entry) => sync(entry).catch(report)));
++		config.invalidate();
++	};
++	const unsubscribers = [];
++	const events = db;
++	if (typeof events.subscribe === "function") {
++		let dropped = false;
++		const markDropped = () => {
++			dropped = true;
++		};
++		unsubscribers.push(events.subscribe("reconnecting", markDropped), events.subscribe("disconnected", markDropped), events.subscribe("connected", () => {
++			if (!dropped) return;
++			dropped = false;
++			resync().catch(report);
++		}), events.subscribe("auth", (tokens) => {
++			const renewed = signedOut && Boolean(tokens);
++			signedOut = !tokens;
++			if (renewed) resync().catch(report);
++		}));
++	}
++	const cleanup = () => {
++		for (const unsubscribe of unsubscribers.splice(0)) unsubscribe();
++		for (const entry of entries.values()) {
++			entry.closed = true;
++			entry.buffer.length = 0;
++			release(entry.lives.splice(0));
++			tracker.delete(entry.key);
++		}
++		entries.clear();
++	};
++	return {
++		load,
++		unload,
++		resync,
++		cleanup
++	};
++}
++// src/internal/schema.ts
++const TEMP_ID_PREFIX = "__temp__";
++const createTempRecordId = (tableName) => {
++	const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
++	return new RecordId(tableName, `${TEMP_ID_PREFIX}${suffix}`);
++};
++const isTempId = (id, tableName) => {
++	const normalized = toRecordIdString(id);
++	return (normalized.startsWith(`${tableName}:`) ? normalized.slice(tableName.length + 1) : normalized).startsWith(TEMP_ID_PREFIX);
++};
++function createInsertSchema(tableName, recordIds = "native") {
++	return { "~standard": {
++		version: 1,
++		vendor: "tanstack-db-surrealdb",
++		validate: (value) => {
++			if (!value || typeof value !== "object" || Array.isArray(value)) return { issues: [{ message: "Insert data must be an object." }] };
++			if (recordIds === "string") {
++				const data = stringifyRecordIdsDeep({ ...value });
++				data.id = toTableRecordIdString(tableName, data.id ?? createTempRecordId(tableName));
++				return { value: data };
++			}
++			const data = normalizeRecordIdLikeFields({ ...value });
++			if (!data.id) data.id = createTempRecordId(tableName);
++			return { value: data };
++		},
++		types: void 0
++	} };
++}
+ // src/internal/subset-tracker.ts
+ var ActiveSubsetTracker = class {
+ 	subsetIds = /* @__PURE__ */ new Map();
+@@ -507,10 +1050,24 @@ var ActiveSubsetTracker = class {
+ 	has(id) {
+ 		return this.activeIds.has(id);
+ 	}
++	idsOf(key) {
++		return this.subsetIds.get(key) ?? /* @__PURE__ */ new Set();
++	}
+ 	set(key, ids) {
+ 		this.subsetIds.set(key, ids);
+ 		this.rebuildActiveIds();
+ 	}
++	addId(key, id) {
++		const ids = this.subsetIds.get(key);
++		if (!ids) return;
++		ids.add(id);
++		this.activeIds.add(id);
++	}
++	removeId(key, id) {
++		if (!this.subsetIds.get(key)?.delete(id)) return;
++		for (const other of this.subsetIds.values()) if (other.has(id)) return;
++		this.activeIds.delete(id);
++	}
+ 	delete(key) {
+ 		this.subsetIds.delete(key);
+ 		this.rebuildActiveIds();
+@@ -541,184 +1098,47 @@ const toTableResource = (table) => {
+ 	return new Table(normalized.name);
+ };
+ const tableNameOf = (table) => toTableOptions(table).name;
+-// src/table.ts
+-const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+-const toFieldPath = (value) => {
+-	if (!Array.isArray(value)) throw new Error("Expected a field path array in where expression.");
+-	return value;
+-};
+-const quoteIdentifier = (segment) => {
+-	if (IDENTIFIER_RE.test(segment)) return segment;
+-	return `\`${segment.replaceAll("`", "\\`")}\``;
+-};
+-const formatFieldPath = (path) => {
+-	let out = "";
+-	for (const segment of path) {
+-		if (typeof segment === "number") {
+-			out += `[${segment}]`;
+-			continue;
+-		}
+-		const next = quoteIdentifier(segment);
+-		out = out ? `${out}.${next}` : next;
++// src/schema.ts
++const holdsText = (kind) => kind.kind === "string" || kind.kind === "union" && (kind.variants ?? []).some(holdsText);
++const holdsRecord = (kind) => kind.kind === "record" || kind.kind === "union" && (kind.variants ?? []).some(holdsRecord);
++const collectRecordPaths = (kind, path, out, table) => {
++	if (!kind) return;
++	switch (kind.kind) {
++		case "record":
++			out.add(path.join("."));
++			return;
++		case "union":
++			if (holdsRecord(kind) && holdsText(kind)) throw new Error(`${table}.${path.join(".")} can hold both a record and a string, which string record ids cannot tell apart.`);
++			for (const variant of kind.variants ?? []) collectRecordPaths(variant, path, out, table);
++			return;
++		case "array":
++		case "set":
++			collectRecordPaths(kind.item, path, out, table);
++			return;
++		case "objectLiteral":
++			for (const field of kind.fields ?? []) collectRecordPaths(field.kind, [...path, field.name], out, table);
++			return;
+ 	}
+-	return out;
+ };
+-const isReferencePathCandidate = (value) => Array.isArray(value) && value.length > 0 && typeof value[0] === "string" && value.every((segment) => typeof segment === "string" || typeof segment === "number");
+-const mapRelationPath = (path, relation) => {
+-	if (!relation) return path;
+-	if (path[0] === "from") return ["in", ...path.slice(1)];
+-	if (path[0] === "to") return ["out", ...path.slice(1)];
+-	return path;
+-};
+-const normalizeFilterValue = (value) => {
+-	if (Array.isArray(value)) return value.map((item) => normalizeFilterValue(item));
+-	const native = toNativeRecordIdLikeValue(value);
+-	if (native !== value) return native;
+-	if (value && typeof value === "object") return normalizeRecordIdLikeValue(value);
+-	return normalizeRecordIdLikeValue(value);
+-};
+-const toSqlFragment = (value) => {
+-	if (typeof value === "object" && value !== null && "sql" in value && typeof value.sql === "string") return value;
+-	throw new Error("Unsupported where expression node.");
+-};
+-const joinLogical = (op, args) => {
+-	const parts = args.map(toSqlFragment).map((frag) => frag.sql);
+-	if (parts.length === 0) return { sql: op === "AND" ? "true" : "false" };
+-	if (parts.length === 1) return { sql: parts[0] };
+-	return { sql: parts.map((part) => `(${part})`).join(` ${op} `) };
+-};
+-const buildSubsetQuery = (table, subset) => {
+-	let paramIdx = 0;
+-	const params = { table: table.name };
+-	const nextParam = (value) => {
+-		const key = `p${paramIdx++}`;
+-		params[key] = value;
+-		return `$${key}`;
+-	};
+-	const comparison = (fieldPath, op, value) => {
+-		const field = formatFieldPath(mapRelationPath(toFieldPath(fieldPath), table.relation));
+-		if (value === void 0) {
+-			if (op === "=") return { sql: `${field} IS NONE` };
+-			if (op === "!=") return { sql: `${field} IS NOT NONE` };
+-			throw new Error(`Cannot compare field '${field}' with undefined using '${op}'.`);
+-		}
+-		if (isReferencePathCandidate(value)) throw new Error("Got a field reference on the right side of a where comparison. Pass a concrete value.");
+-		return { sql: `${field} ${op} ${nextParam(normalizeFilterValue(value))}` };
+-	};
+-	const whereSqlFrom = (expr) => {
+-		const fragment = parseWhereExpression(expr, {
+-			handlers: {
+-				and: (...args) => joinLogical("AND", args),
+-				or: (...args) => joinLogical("OR", args),
+-				not: (arg) => ({ sql: `NOT (${toSqlFragment(arg).sql})` }),
+-				eq: (field, value) => comparison(field, "=", value),
+-				gt: (field, value) => comparison(field, ">", value),
+-				gte: (field, value) => comparison(field, ">=", value),
+-				lt: (field, value) => comparison(field, "<", value),
+-				lte: (field, value) => comparison(field, "<=", value),
+-				like: (field, value) => comparison(field, "LIKE", value),
+-				ilike: (field, value) => {
+-					return { sql: `string::lower(${formatFieldPath(mapRelationPath(toFieldPath(field), table.relation))}) LIKE string::lower(${nextParam(normalizeFilterValue(value))})` };
+-				},
+-				in: (field, value) => {
+-					const f = formatFieldPath(mapRelationPath(toFieldPath(field), table.relation));
+-					if (Array.isArray(value) && value.length === 0) return { sql: "false" };
+-					return { sql: `${f} IN ${nextParam(normalizeFilterValue(value))}` };
+-				},
+-				isNull: (field) => ({ sql: `${formatFieldPath(mapRelationPath(toFieldPath(field), table.relation))} IS NULL` }),
+-				isUndefined: (field) => ({ sql: `${formatFieldPath(mapRelationPath(toFieldPath(field), table.relation))} IS NONE` })
+-			},
+-			onUnknownOperator: (op) => {
+-				throw new Error(`Unsupported where operator '${op}' for SurrealQL translation.`);
+-			}
+-		});
+-		if (!fragment) return "";
+-		return fragment.sql;
+-	};
+-	const whereParts = [];
+-	if (subset?.where) {
+-		const parsed = whereSqlFrom(subset.where);
+-		if (parsed) whereParts.push(parsed);
++/** Reads a table's relation flag and record-link fields from SurrealKit's `tables`. */
++function schemaTableOptions(tables, name) {
++	const table = tables.find((candidate) => candidate.name === name);
++	if (!table) throw new Error(`Table "${name}" is not in the provided schema tables.`);
++	const relation = table.type?.kind === "relation";
++	const paths = /* @__PURE__ */ new Set();
++	for (const field of table.fields ?? []) {
++		if (!Array.isArray(field.path)) throw new Error("Expected tables from a version 2 schema document (surrealkit compile).");
++		const path = field.path.filter((part) => part !== "*");
++		collectRecordPaths(field.kind, path, paths, table.name);
+ 	}
+-	if (subset?.cursor?.whereFrom) {
+-		const cursorWhere = whereSqlFrom(subset.cursor.whereFrom);
+-		if (cursorWhere) whereParts.push(cursorWhere);
++	paths.delete("id");
++	if (relation) {
++		paths.delete("in");
++		paths.delete("out");
+ 	}
+-	const whereSql = whereParts.length ? ` WHERE ${whereParts.map((part) => `(${part})`).join(" AND ")}` : "";
+-	const order = parseOrderByExpression(subset?.orderBy);
+-	return {
+-		sql: `SELECT * FROM type::table($table)${whereSql}${order.length ? ` ORDER BY ${order.map((clause) => `${formatFieldPath(mapRelationPath(clause.field, table.relation))} ${clause.direction.toUpperCase()}`).join(", ")}` : ""}${typeof subset?.limit === "number" ? ` LIMIT ${nextParam(subset.limit)}` : ""}${typeof subset?.offset === "number" ? ` START ${nextParam(subset.offset)}` : ""};`,
+-		params
+-	};
+-};
+-function manageTable(db, config) {
+-	const { name } = config;
+-	const table = new Table(name);
+-	const listAll = async () => {
+-		return loadSubset();
+-	};
+-	const loadSubset = async (subset) => {
+-		const { sql, params } = buildSubsetQuery(config, subset);
+-		const [res] = await db.query(sql, params);
+-		return res ?? [];
+-	};
+-	const create = async (data) => {
+-		const id = data.id;
+-		if (!id) {
+-			const created = await db.create(table).content(data);
+-			return firstRow(created);
+-		}
+-		const payload = { ...data };
+-		payload.id = toRecordId(name, id);
+-		const inserted = await db.insert(table, payload);
+-		return firstRow(inserted);
+-	};
+-	const update = async (id, data) => {
+-		const { id: _ignoredId, ...rest } = data;
+-		await db.update(id).merge(rest);
+-	};
+-	const remove = async (id) => {
+-		await db.delete(id);
+-	};
+-	const subscribe = (cb) => {
+-		let killed = false;
+-		let live;
+-		const on = (msg) => {
+-			const { action, value } = msg;
+-			if (action === "KILLED") return;
+-			if (action === "CREATE") cb({
+-				type: "insert",
+-				row: value
+-			});
+-			else if (action === "UPDATE") cb({
+-				type: "update",
+-				row: value
+-			});
+-			else if (action === "DELETE") cb({
+-				type: "delete",
+-				row: { id: value.id }
+-			});
+-		};
+-		const start = async () => {
+-			if (!db.isFeatureSupported(Features.LiveQueries)) return;
+-			live = await db.live(table);
+-			live.subscribe(on);
+-		};
+-		start();
+-		return () => {
+-			if (killed) return;
+-			killed = true;
+-			if (live) live.kill();
+-		};
+-	};
+ 	return {
+-		listAll,
+-		loadSubset,
+-		create,
+-		update,
+-		remove,
+-		softDelete: remove,
+-		subscribe
++		relation,
++		recordFields: [...paths].sort()
+ 	};
+ }
+ // src/encryption/index.ts
+@@ -784,17 +1204,36 @@ var WebCryptoAESGCM = class WebCryptoAESGCM {
  };
  // src/index.ts
  const NOOP = () => {};
@@ -121,7 +2564,68 @@ index 1bc88c2..744f8c7 100644
  const getWriteUtils = (utils) => typeof utils === "object" && utils !== null ? utils : {};
  const syncModeFrom = (syncMode) => syncMode ?? "eager";
  function modernSurrealCollectionOptions(config) {
-@@ -860,9 +867,12 @@ function modernSurrealCollectionOptions(config) {
+-	const { db, table, queryClient, queryKey, onError, e2ee, crdt, syncMode: inputSyncMode } = config;
++	const { db, table, queryClient, queryKey, onError, e2ee, crdt, syncMode: inputSyncMode, recordIds: recordIdMode = "native", tables: schemaTables } = config;
+ 	if (!queryClient || !queryKey) throw new Error("queryClient and queryKey are required.");
+ 	const syncMode = syncModeFrom(inputSyncMode);
+ 	const isOnDemandLike = syncMode === "on-demand" || syncMode === "progressive";
+ 	const isStrictOnDemand = syncMode === "on-demand";
+ 	const queryDrivenSyncMode = "on-demand";
+-	const tableOptions = toTableOptions(table);
+-	const tableName = tableOptions.name;
++	const inputTableOptions = toTableOptions(table);
++	const tableName = inputTableOptions.name;
++	const stringIds = recordIdMode === "string";
++	const schemaOptions = stringIds && schemaTables ? schemaTableOptions(schemaTables, tableName) : void 0;
++	const tableOptions = {
++		...inputTableOptions,
++		relation: inputTableOptions.relation || schemaOptions?.relation
++	};
++	const recordFields = [
++		"id",
++		...tableOptions.relation ? ["in", "out"] : [],
++		...schemaOptions?.recordFields ?? []
++	];
+ 	const collectionId = config.id ?? deriveCollectionId(tableName, queryKey);
+ 	const tableResource = toTableResource(table);
+ 	const activeSubsets = new ActiveSubsetTracker();
+@@ -813,12 +1252,24 @@ function modernSurrealCollectionOptions(config) {
+ 		if (!crdtApplyLocalChange) throw missingCrdtHandlers();
+ 		crdtApplyLocalChange(...args);
+ 	};
+-	const tableAccess = manageTable(db, tableOptions);
++	const tableAccess = manageTable(db, tableOptions, stringIds ? { recordFields: new Set(recordFields) } : void 0);
+ 	const docs = /* @__PURE__ */ new Map();
+ 	const aadFor = (ctx) => (e2ee?.aad ?? defaultAad)(ctx);
+-	const getKey = (row) => toRecordIdString(row.id);
++	const toIdString = (id) => toTableRecordIdString(tableName, id);
++	const getKey = (row) => stringIds ? toIdString(row.id) : toRecordIdString(row.id);
+ 	const normalizeMutationId = (id) => toRecordId(tableName, id);
++	const toRowId = (id) => stringIds ? toIdString(id) : normalizeMutationId(id);
++	const toSurrealId = (id) => stringIds ? toSurrealRecordId(toIdString(id)) : normalizeMutationId(id);
++	const toSurrealFields = (row) => stringIds ? recordFieldsToSurreal(row, recordFields) : row;
++	const deleteKeyFor = (id) => stringIds ? toIdString(id) : `${tableName}:${toRecordKeyString(id)}`;
+ 	const normalizeRow = (row) => {
++		if (stringIds) {
++			const stringified = stringifyRecordIdsDeep(row);
++			return {
++				...stringified,
++				id: toIdString(stringified.id)
++			};
++		}
+ 		const normalized = normalizeRecordIdLikeValueDeep(row);
+ 		return {
+ 			...normalized,
+@@ -841,7 +1292,7 @@ function modernSurrealCollectionOptions(config) {
+ 		const merged = {
+ 			...stripEnvelopeFields(row),
+ 			...payload,
+-			id: normalizeMutationId(row.id)
++			id: toRowId(row.id)
+ 		};
+ 		return normalizeRow(merged);
+ 	};
+@@ -860,9 +1311,12 @@ function modernSurrealCollectionOptions(config) {
  	const updatesTableName = crdtEnabled ? tableNameOf(crdt.updatesTable) : void 0;
  	const updatesTable = crdtEnabled ? toTableResource(crdt.updatesTable) : void 0;
  	const snapshotsTableName = crdtEnabled && crdt.snapshotsTable ? tableNameOf(crdt.snapshotsTable) : void 0;
@@ -135,7 +2639,26 @@ index 1bc88c2..744f8c7 100644
  		const doc = new LoroDoc();
  		docs.set(id, doc);
  		return doc;
-@@ -959,7 +969,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -936,14 +1390,14 @@ function modernSurrealCollectionOptions(config) {
+ 		const id = toRecordKeyString(materialized.id);
+ 		if (!e2eeEnabled) {
+ 			const { id: _ignoredId, ...rest } = materialized;
+-			await db.upsert(normalizeMutationId(materialized.id)).merge(rest);
++			await db.upsert(toSurrealId(materialized.id)).merge(toSurrealFields(rest));
+ 			return;
+ 		}
+-		const payload = await encodeBaseRow(omitUndefined({
++		const payload = await encodeBaseRow(toSurrealFields(omitUndefined({
+ 			...materialized,
+ 			id: void 0
+-		}), id);
+-		await db.upsert(normalizeMutationId(materialized.id)).merge(payload);
++		})), id);
++		await db.upsert(toSurrealId(materialized.id)).merge(payload);
+ 	};
+ 	const hydratePlainRows = async (rows, write, begin, commit, type = "insert") => {
+ 		if (!rows.length) return;
+@@ -959,7 +1413,7 @@ function modernSurrealCollectionOptions(config) {
  	};
  	const hydrateCrdtDoc = async (id, write, begin, commit, writeType = "insert") => {
  		if (!crdtEnabled || !updatesTableName) return;
@@ -144,7 +2667,28 @@ index 1bc88c2..744f8c7 100644
  		let since;
  		if (snapshotsTableName) {
  			const snapshot = (await queryRows(db, `SELECT * FROM type::table($table) WHERE doc = $doc ORDER BY ts DESC LIMIT 1;`, {
-@@ -1057,7 +1067,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1008,17 +1462,14 @@ function modernSurrealCollectionOptions(config) {
+ 			live.subscribe(async (message) => {
+ 				if (message.action === "KILLED") return;
+ 				const row = message.value;
+-				const id = toRecordKeyString(row.id);
+-				const wasVisible = activeSubsets.has(id);
+-				if (isStrictOnDemand && !wasVisible && message.action !== "DELETE") return;
++				const rowId = row.id;
++				toRecordKeyString(rowId);
+ 				if (message.action === "DELETE") {
+-					activeSubsets.deleteId(id);
+-					if (isStrictOnDemand && !wasVisible) return;
+ 					ctx.begin();
+ 					try {
+ 						ctx.write({
+ 							type: "delete",
+-							key: `${tableName}:${id}`
++							key: deleteKeyFor(rowId)
+ 						});
+ 					} finally {
+ 						ctx.commit();
+@@ -1057,7 +1508,7 @@ function modernSurrealCollectionOptions(config) {
  				const id = idFromDocRef(value.doc);
  				if (value.actor && value.actor === resolveActor(id)) return;
  				if (isStrictOnDemand && !activeSubsets.has(id)) return;
@@ -153,7 +2697,144 @@ index 1bc88c2..744f8c7 100644
  				const bytes = await decodeUpdateBytes(value, "update");
  				if (!bytes.byteLength) return;
  				doc.import(bytes);
-@@ -1183,7 +1193,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1077,9 +1528,59 @@ function modernSurrealCollectionOptions(config) {
+ 				cleanupUpdateLive = NOOP;
+ 			};
+ 		};
++		const collectionHas = (key) => typeof ctx.collection?.has === "function" ? ctx.collection.has(key) : void 0;
++		const liveSubsets = isOnDemandLike && !crdtEnabled ? createLiveSubsets({
++			db,
++			table: tableOptions,
++			tracker: activeSubsets,
++			idOf: stringIds ? toIdString : void 0,
++			queryOptions: stringIds ? { recordFields: new Set(recordFields) } : void 0,
++			onError,
++			loadRows: (subset) => tableAccess.loadSubset(subset),
++			decode: decodeBaseRow,
++			writeRows: async (rows) => {
++				if (!rows.length) return;
++				ctx.begin();
++				let receipt;
++				try {
++					for (const row of rows) ctx.write({
++						type: collectionHas(getKey(row)) ? "update" : "insert",
++						value: row
++					});
++				} finally {
++					receipt = ctx.commit();
++				}
++				await receipt;
++			},
++			evict: async (ids) => {
++				const keys = ids.map((id) => stringIds ? id : `${tableName}:${id}`).filter((key) => collectionHas(key) !== false);
++				if (!keys.length) return;
++				ctx.begin();
++				let receipt;
++				try {
++					for (const key of keys) ctx.write({
++						type: "delete",
++						key
++					});
++				} finally {
++					receipt = ctx.commit();
++				}
++				await receipt;
++			},
++			syncedRows: () => ctx.collection._state?.syncedData?.values() ?? [],
++			invalidate: () => {
++				ctx.invalidateLoadedSubsets?.();
++			}
++		}) : void 0;
+ 		const loadSubset = async (subset) => {
+-			const preferredFromSubset = primeRecordIdIdentityFromSubset(subset);
+-			applyPreferredRecordIdIdentityToCollection(ctx, preferredFromSubset);
++			if (!stringIds) {
++				const preferredFromSubset = primeRecordIdIdentityFromSubset(subset);
++				applyPreferredRecordIdIdentityToCollection(ctx, preferredFromSubset);
++			}
++			if (liveSubsets) {
++				await liveSubsets.load(subset);
++				return;
++			}
+ 			const key = subsetCacheKey(subset);
+ 			const rows = await tableAccess.loadSubset(subset);
+ 			const ids = new Set(rows.map((row) => toRecordKeyString(row.id)));
+@@ -1103,7 +1604,11 @@ function modernSurrealCollectionOptions(config) {
+ 			await ensureUpdateLive();
+ 		};
+ 		const unloadSubset = (subset) => {
+-			primeRecordIdIdentityFromSubset(subset);
++			if (!stringIds) primeRecordIdIdentityFromSubset(subset);
++			if (liveSubsets) {
++				liveSubsets.unload(subset);
++				return;
++			}
+ 			const key = subsetCacheKey(subset);
+ 			activeSubsets.delete(key);
+ 			if (activeSubsets.size === 0) {
+@@ -1120,6 +1625,7 @@ function modernSurrealCollectionOptions(config) {
+ 		};
+ 		const cleanup = () => {
+ 			killed = true;
++			liveSubsets?.cleanup();
+ 			activeSubsets.clear();
+ 			cleanupBaseLive();
+ 			cleanupUpdateLive();
+@@ -1131,16 +1637,23 @@ function modernSurrealCollectionOptions(config) {
+ 			unloadSubset
+ 		};
+ 	};
++	const writeDeleteIfPresent = (writeUtils, key) => {
++		(async () => writeUtils.writeDelete?.(key))().catch((error) => {
++			if (error instanceof DeleteOperationItemNotFoundError) return;
++			if (!onError) throw error;
++			onError(error);
++		});
++	};
+ 	const base = queryCollectionOptions({
+ 		id: collectionId,
+-		schema: createInsertSchema(tableName),
++		schema: createInsertSchema(tableName, recordIdMode),
+ 		getKey,
+ 		queryKey,
+ 		queryClient,
+ 		syncMode: queryDrivenSyncMode,
+ 		queryFn: async ({ meta }) => {
+ 			try {
+-				primeRecordIdIdentityFromSubset(meta?.loadSubsetOptions);
++				if (!stringIds) primeRecordIdIdentityFromSubset(meta?.loadSubsetOptions);
+ 				if (!meta?.loadSubsetOptions) return [];
+ 				if (!crdtEnabled) {
+ 					const rows = await tableAccess.loadSubset(meta?.loadSubsetOptions);
+@@ -1159,10 +1672,10 @@ function modernSurrealCollectionOptions(config) {
+ 				const normalized = normalizeRow(mutation.modified);
+ 				if (!crdtEnabled) {
+ 					const idKey = toRecordKeyString(normalized.id);
+-					const payload = omitUndefined({
++					const payload = toSurrealFields(omitUndefined({
+ 						...normalized,
+ 						id: void 0
+-					});
++					}));
+ 					const recordPayload = await encodeBaseRow(payload, idKey);
+ 					if (isTempId(normalized.id, tableName)) {
+ 						const created = await db.create(tableResource).content(recordPayload);
+@@ -1170,20 +1683,20 @@ function modernSurrealCollectionOptions(config) {
+ 						const createdId = createdRow && createdRow.id ? createdRow.id : normalized.id;
+ 						const resolved = {
+ 							...normalized,
+-							id: normalizeMutationId(createdId)
++							id: toRowId(createdId)
+ 						};
+ 						writeUtils.writeUpsert?.(resolved);
+ 						continue;
+ 					}
+ 					await db.insert(tableResource, {
+-						id: normalizeMutationId(normalized.id),
++						id: toSurrealId(normalized.id),
+ 						...recordPayload
+ 					});
+ 					writeUtils.writeUpsert?.(normalized);
  					continue;
  				}
  				const id = toRecordKeyString(normalized.id);
@@ -162,17 +2843,74 @@ index 1bc88c2..744f8c7 100644
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "insert",
-@@ -1233,7 +1243,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1204,27 +1717,34 @@ function modernSurrealCollectionOptions(config) {
+ 			const writeUtils = getWriteUtils(params.collection.utils);
+ 			for (const mutation of params.transaction.mutations) {
+ 				if (mutation.type !== "update") continue;
+-				const mutationId = normalizeMutationId(mutation.key);
+-				const normalizedModified = omitUndefined(normalizeRecordIdLikeFields({ ...mutation.modified }));
++				const mutationKey = mutation.key;
++				const mutationId = toSurrealId(mutationKey);
++				const rowId = toRowId(mutationKey);
++				const modified = { ...mutation.modified };
++				const normalizedModified = omitUndefined(stringIds ? stringifyRecordIdsDeep(modified) : normalizeRecordIdLikeFields(modified));
+ 				const normalized = normalizeRow({
+ 					...normalizedModified,
+-					id: mutationId
++					id: rowId
+ 				});
++				const fieldsToWrite = stringIds ? omitUndefined(stringifyRecordIdsDeep({
++					...mutation.changes,
++					id: void 0
++				})) : normalizedModified;
+ 				if (!crdtEnabled) {
+ 					if (!e2eeEnabled) {
+-						await db.update(mutationId).merge(normalizedModified);
+-						writeUtils.writeUpsert?.(normalized);
++						if (await db.update(mutationId).merge(toSurrealFields(fieldsToWrite))) writeUtils.writeUpsert?.(normalized);
++						else writeDeleteIfPresent(writeUtils, deleteKeyFor(rowId));
+ 						continue;
+ 					}
+ 					const current = await db.select(mutationId);
+ 					const currentRow = toRecordArray(current)[0];
+-					const decodedCurrent = currentRow ? await decodeBaseRow(currentRow) : { id: mutationId };
++					const decodedCurrent = currentRow ? await decodeBaseRow(currentRow) : { id: rowId };
+ 					const merged = {
+ 						...decodedCurrent,
+-						...normalizedModified
++						...fieldsToWrite
+ 					};
+ 					delete merged.id;
+-					const encoded = await encodeBaseRow(omitUndefined(merged), toRecordKeyString(mutationId));
++					const encoded = await encodeBaseRow(toSurrealFields(omitUndefined(merged)), toRecordKeyString(rowId));
+ 					await db.update(mutationId).merge(encoded);
+ 					writeUtils.writeUpsert?.(normalizeRow({
+ 						...decodedCurrent,
+@@ -1232,8 +1752,8 @@ function modernSurrealCollectionOptions(config) {
+ 					}));
  					continue;
  				}
- 				const id = toRecordKeyString(mutationId);
+-				const id = toRecordKeyString(mutationId);
 -				const doc = getDoc(id);
++				const id = toRecordKeyString(rowId);
 +				const doc = await getDoc(id);
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "update",
-@@ -1261,7 +1271,7 @@ function modernSurrealCollectionOptions(config) {
- 					writeUtils.writeDelete?.(`${tableName}:${id}`);
+@@ -1254,18 +1774,20 @@ function modernSurrealCollectionOptions(config) {
+ 			const writeUtils = getWriteUtils(params.collection.utils);
+ 			for (const mutation of params.transaction.mutations) {
+ 				if (mutation.type !== "delete") continue;
+-				const mutationId = normalizeMutationId(mutation.key);
+-				const id = toRecordKeyString(mutationId);
++				const mutationKey = mutation.key;
++				const mutationId = toSurrealId(mutationKey);
++				const rowId = toRowId(mutationKey);
++				const id = toRecordKeyString(rowId);
+ 				if (!crdtEnabled) {
+ 					await db.delete(mutationId);
+-					writeUtils.writeDelete?.(`${tableName}:${id}`);
++					writeDeleteIfPresent(writeUtils, deleteKeyFor(rowId));
  					continue;
  				}
 -				const doc = getDoc(id);
@@ -180,7 +2918,21 @@ index 1bc88c2..744f8c7 100644
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "delete",
-@@ -1296,7 +1306,7 @@ function modernSurrealCollectionOptions(config) {
+-					value: { id: mutationId }
++					value: { id: rowId }
+ 				};
+ 				applyCrdtLocalChange(doc, localChange);
+ 				const bytes = doc.export({
+@@ -1273,7 +1795,7 @@ function modernSurrealCollectionOptions(config) {
+ 					from: vv
+ 				});
+ 				await persistCrdtUpdate(id, bytes, localChange);
+-				writeUtils.writeDelete?.(`${tableName}:${id}`);
++				writeDeleteIfPresent(writeUtils, deleteKeyFor(rowId));
+ 			}
+ 		})
+ 	});
+@@ -1296,7 +1818,7 @@ function modernSurrealCollectionOptions(config) {
  					const updates = await queryRows(db, `SELECT * FROM type::table($table) ORDER BY ts ASC;`, { table: updatesTableName });
  					for (const update of updates) {
  						const id = idFromDocRef(update.doc);
@@ -189,3 +2941,22 @@ index 1bc88c2..744f8c7 100644
  						const bytes = await decodeUpdateBytes(update, "update");
  						if (!bytes.byteLength) continue;
  						doc.import(bytes);
+@@ -1340,7 +1862,7 @@ function modernSurrealCollectionOptions(config) {
+ function surrealCollectionOptions(config) {
+ 	return modernSurrealCollectionOptions(config);
+ }
+-function persistedSurrealCollectionOptions(config) {
++function createPersistedOptions(config) {
+ 	const { persistence, schemaVersion, ...surrealConfig } = config;
+ 	const options = modernSurrealCollectionOptions(surrealConfig);
+ 	return persistedCollectionOptions({
+@@ -1349,6 +1871,9 @@ function persistedSurrealCollectionOptions(config) {
+ 		...options
+ 	});
+ }
++function persistedSurrealCollectionOptions(config) {
++	return createPersistedOptions(config);
++}
+ export { WebCryptoAESGCM, applyLoroJsonChange, applyLoroRichtextChange, createLoroProfile, materializeLoroJson, materializeLoroRichtext, persistedSurrealCollectionOptions, surrealCollectionOptions, toRecordKeyString };
+ 
+ //# sourceMappingURL=index.mjs.map

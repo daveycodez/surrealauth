@@ -38,7 +38,7 @@ export type SurrealAuth = ReturnType<typeof createSurrealAuth>
 export function createSurrealAuth(config: SurrealAuthConfig) {
   const { endpoint, namespace, database, access, options } = config
   const cookie: AuthCookie = { ...DEFAULT_AUTH_COOKIE, ...config.cookie }
-  const db = new Surreal()
+  const db = new Surreal({ codecOptions: { useNativeDates: true } })
 
   const stopCookieAuth = setupCookieAuth(db, { namespace, database, access, cookie })
   const auth = createAuthActions(db, { namespace, database, access, cookie })
