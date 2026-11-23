@@ -18,9 +18,11 @@ import {
 import {
   type Credential,
   connectAuthentication,
+  rotatedTokens,
   savedCredentials,
   setupCookieAuth
 } from "./lib/cookie-auth"
+import { PromptCloseWebSocket } from "./lib/prompt-close-websocket"
 import { parseRecordId, type TokenClaims, tokenClaims } from "./lib/token-helpers"
 
 export type SurrealAuthConfig = {
@@ -35,19 +37,28 @@ export type SurrealAuthConfig = {
 
 export type SurrealAuth = ReturnType<typeof createSurrealAuth>
 
+const CONNECT_TIMEOUT_MS = 5000
+
 // Opens its own connection. Create one per app, and close() it when done (e.g. on hot reload).
 export function createSurrealAuth(config: SurrealAuthConfig) {
   const { endpoint, namespace, database, access, options } = config
   const cookie: AuthCookie = { ...DEFAULT_AUTH_COOKIE, ...config.cookie }
-  const db = new Surreal({ codecOptions: { useNativeDates: true } })
+  const db = new Surreal({
+    codecOptions: { useNativeDates: true },
+    websocketImpl: PromptCloseWebSocket
+  })
 
-  const stopCookieAuth = setupCookieAuth(db, { namespace, database, access, cookie })
+  const cookieAuth = setupCookieAuth(db, { namespace, database, access, cookie }, () => {
+    removeAuthCookie(cookie)
+    reconnect().catch(() => {})
+  })
   const auth = createAuthActions(db, { namespace, database, access, cookie })
 
   // Signs in from the cookie as part of connecting, so queries sent meanwhile wait for the session
   // instead of running as a guest. A rejected access token falls back to the refresh token, and if
   // every saved credential is rejected, the cookie is forgotten and the client connects as a guest.
-  async function connect() {
+  async function connect(): Promise<true> {
+    const saved = readAuthCookie(cookie)
     for (const credential of savedCredentials({ namespace, database, access, cookie })) {
       try {
         return await connectWith(credential)
@@ -56,6 +67,7 @@ export function createSurrealAuth(config: SurrealAuthConfig) {
       }
     }
 
+    if (saved?.refresh && (await rotatedTokens(cookie, saved.refresh))) return connect()
     if (readAuthCookie(cookie)) removeAuthCookie(cookie)
     return connectWith(null)
   }
@@ -65,6 +77,8 @@ export function createSurrealAuth(config: SurrealAuthConfig) {
       ...options,
       namespace,
       database,
+      // setupCookieAuth renews first, since the SDK's refresh fails on a reconnected socket.
+      expiryMargin: 1,
       authentication: connectAuthentication(credential)
     })
     if (!credential) return connecting
@@ -82,7 +96,8 @@ export function createSurrealAuth(config: SurrealAuthConfig) {
     try {
       return await Promise.race([connecting, rejected])
     } catch (error) {
-      if (error instanceof ServerError) await db.close()
+      // Waits for the old socket, since its late event would kill the next connection.
+      if (error instanceof ServerError) await Promise.all([disconnected(), db.close()])
       throw error
     } finally {
       unsubscribe()
@@ -111,14 +126,33 @@ export function createSurrealAuth(config: SurrealAuthConfig) {
     await reconnecting
   }
 
+  function withinConnectTimeout<T>(pending: Promise<T>) {
+    let timer: ReturnType<typeof setTimeout>
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new ConnectionUnavailableError()), CONNECT_TIMEOUT_MS)
+    })
+    return Promise.race([pending, timeout]).finally(() => clearTimeout(timer))
+  }
+
+  function whenConnected() {
+    if (db.status === "connected") return Promise.resolve()
+    if (db.status === "disconnected") return withinConnectTimeout(reconnect())
+
+    let unsubscribe = () => {}
+    const connected = new Promise<void>((resolve) => {
+      unsubscribe = db.subscribe("connected", () => resolve())
+    })
+    return withinConnectTimeout(connected).finally(() => unsubscribe())
+  }
+
   // The SDK can report "connected" with no usable socket, so a rejected send also reconnects.
   async function withConnection<T>(action: () => Promise<T>) {
-    if (db.status === "disconnected") await reconnect()
+    await whenConnected()
     try {
       return await action()
     } catch (error) {
       if (!(error instanceof ConnectionUnavailableError)) throw error
-      await reconnect()
+      await withinConnectTimeout(reconnect())
       return action()
     }
   }
@@ -131,8 +165,29 @@ export function createSurrealAuth(config: SurrealAuthConfig) {
     return withConnection(() => auth.register(email, password))
   }
 
+  // Signs out locally when the server can't be reached, since requests would wait for a reconnect.
+  async function logout() {
+    if (db.status === "connected") {
+      const signedOut = await Promise.race([
+        auth.logout().then(
+          () => true,
+          () => false
+        ),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000))
+      ])
+      if (signedOut) {
+        cookieAuth.announceSignOut()
+        return
+      }
+    }
+
+    removeAuthCookie(cookie)
+    cookieAuth.announceSignOut()
+    reconnect().catch(() => {})
+  }
+
   function close() {
-    stopCookieAuth()
+    cookieAuth.stop()
     return db.close()
   }
 
@@ -141,11 +196,9 @@ export function createSurrealAuth(config: SurrealAuthConfig) {
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe())
   }
 
-  // The session's access token, or else the saved one, so it works offline and before connecting.
+  // The saved token, so it works offline and a local sign-out applies before the socket closes.
   function getToken() {
-    // accessToken throws while the client has no session.
-    const hasSession = db.status === "connected" || db.status === "reconnecting"
-    return (hasSession ? db.accessToken : undefined) ?? readAuthCookie(cookie)?.access ?? null
+    return readAuthCookie(cookie)?.access ?? null
   }
 
   function subscribeToken(listener: () => void) {
@@ -202,6 +255,8 @@ export function createSurrealAuth(config: SurrealAuthConfig) {
     ...auth,
     login,
     register,
+    logout,
+    whenSessionReady: cookieAuth.ready,
     getToken,
     subscribeToken,
     getTokenClaims,

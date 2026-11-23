@@ -24,7 +24,7 @@ function SignIn() {
       await surreal.login(String(form.get("email")), String(form.get("password")))
       await navigate({ to: "/" })
     } catch (error) {
-      setError(errorMessage(error))
+      setError(errorMessage(error, "Incorrect email or password."))
       setPending(false)
     }
   }

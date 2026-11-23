@@ -1,5 +1,5 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e738f4b1bf4 100644
+index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..0d546c638adadb78609ecd24a848a58e57919f33 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
 @@ -1,7 +1,6 @@
@@ -435,7 +435,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  };
  const rebindRecordIdIdentityDeep = (value, preferredByCanonical) => {
  	const canonical = asCanonicalRecordIdString(value);
-@@ -498,6 +781,267 @@ const applyPreferredRecordIdIdentityToCollection = (ctx, preferredByCanonical) =
+@@ -498,6 +781,269 @@ const applyPreferredRecordIdIdentityToCollection = (ctx, preferredByCanonical) =
  	const indexes = collectionWithInternals._indexes?.indexes;
  	if (entries && indexes) for (const index of indexes.values()) index.build?.(entries);
  };
@@ -482,6 +482,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
 +	};
 +	const released = /* @__PURE__ */ new WeakSet();
 +	let signedOut = false;
++	let currentAccess;
 +	const release = (lives) => {
 +		for (const live of lives) {
 +			released.add(live);
@@ -650,7 +651,8 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
 +			dropped = false;
 +			resync().catch(report);
 +		}), events.subscribe("auth", (tokens) => {
-+			const renewed = signedOut && Boolean(tokens);
++			const renewed = Boolean(tokens) && tokens.access !== currentAccess;
++			currentAccess = tokens?.access;
 +			signedOut = !tokens;
 +			if (renewed) resync().catch(report);
 +		}));
@@ -703,7 +705,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  // src/internal/subset-tracker.ts
  var ActiveSubsetTracker = class {
  	subsetIds = /* @__PURE__ */ new Map();
-@@ -508,10 +1052,24 @@ var ActiveSubsetTracker = class {
+@@ -508,10 +1054,24 @@ var ActiveSubsetTracker = class {
  	has(id) {
  		return this.activeIds.has(id);
  	}
@@ -728,7 +730,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  	delete(key) {
  		this.subsetIds.delete(key);
  		this.rebuildActiveIds();
-@@ -542,184 +1100,47 @@ const toTableResource = (table) => {
+@@ -542,184 +1102,47 @@ const toTableResource = (table) => {
  	return new surrealdb.Table(normalized.name);
  };
  const tableNameOf = (table) => toTableOptions(table).name;
@@ -949,7 +951,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  	};
  }
  // src/encryption/index.ts
-@@ -785,17 +1206,49 @@ var WebCryptoAESGCM = class WebCryptoAESGCM {
+@@ -785,17 +1208,49 @@ var WebCryptoAESGCM = class WebCryptoAESGCM {
  };
  // src/index.ts
  const NOOP = () => {};
@@ -1002,7 +1004,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  	const collectionId = config.id ?? deriveCollectionId(tableName, queryKey);
  	const tableResource = toTableResource(table);
  	const activeSubsets = new ActiveSubsetTracker();
-@@ -814,12 +1267,24 @@ function modernSurrealCollectionOptions(config) {
+@@ -814,12 +1269,24 @@ function modernSurrealCollectionOptions(config) {
  		if (!crdtApplyLocalChange) throw missingCrdtHandlers();
  		crdtApplyLocalChange(...args);
  	};
@@ -1029,7 +1031,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  		const normalized = normalizeRecordIdLikeValueDeep(row);
  		return {
  			...normalized,
-@@ -842,7 +1307,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -842,7 +1309,7 @@ function modernSurrealCollectionOptions(config) {
  		const merged = {
  			...stripEnvelopeFields(row),
  			...payload,
@@ -1038,7 +1040,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  		};
  		return normalizeRow(merged);
  	};
-@@ -861,10 +1326,13 @@ function modernSurrealCollectionOptions(config) {
+@@ -861,10 +1328,13 @@ function modernSurrealCollectionOptions(config) {
  	const updatesTableName = crdtEnabled ? tableNameOf(crdt.updatesTable) : void 0;
  	const updatesTable = crdtEnabled ? toTableResource(crdt.updatesTable) : void 0;
  	const snapshotsTableName = crdtEnabled && crdt.snapshotsTable ? tableNameOf(crdt.snapshotsTable) : void 0;
@@ -1054,7 +1056,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  		docs.set(id, doc);
  		return doc;
  	};
-@@ -937,14 +1405,14 @@ function modernSurrealCollectionOptions(config) {
+@@ -937,14 +1407,14 @@ function modernSurrealCollectionOptions(config) {
  		const id = toRecordKeyString(materialized.id);
  		if (!e2eeEnabled) {
  			const { id: _ignoredId, ...rest } = materialized;
@@ -1073,7 +1075,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  	};
  	const hydratePlainRows = async (rows, write, begin, commit, type = "insert") => {
  		if (!rows.length) return;
-@@ -960,7 +1428,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -960,7 +1430,7 @@ function modernSurrealCollectionOptions(config) {
  	};
  	const hydrateCrdtDoc = async (id, write, begin, commit, writeType = "insert") => {
  		if (!crdtEnabled || !updatesTableName) return;
@@ -1082,7 +1084,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  		let since;
  		if (snapshotsTableName) {
  			const snapshot = (await queryRows(db, `SELECT * FROM type::table($table) WHERE doc = $doc ORDER BY ts DESC LIMIT 1;`, {
-@@ -1009,17 +1477,13 @@ function modernSurrealCollectionOptions(config) {
+@@ -1009,17 +1479,13 @@ function modernSurrealCollectionOptions(config) {
  			live.subscribe(async (message) => {
  				if (message.action === "KILLED") return;
  				const row = message.value;
@@ -1102,7 +1104,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  						});
  					} finally {
  						ctx.commit();
-@@ -1058,7 +1522,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1058,7 +1524,7 @@ function modernSurrealCollectionOptions(config) {
  				const id = idFromDocRef(value.doc);
  				if (value.actor && value.actor === resolveActor(id)) return;
  				if (isStrictOnDemand && !activeSubsets.has(id)) return;
@@ -1111,7 +1113,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  				const bytes = await decodeUpdateBytes(value, "update");
  				if (!bytes.byteLength) return;
  				doc.import(bytes);
-@@ -1078,9 +1542,59 @@ function modernSurrealCollectionOptions(config) {
+@@ -1078,9 +1544,59 @@ function modernSurrealCollectionOptions(config) {
  				cleanupUpdateLive = NOOP;
  			};
  		};
@@ -1173,7 +1175,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  			const key = subsetCacheKey(subset);
  			const rows = await tableAccess.loadSubset(subset);
  			const ids = new Set(rows.map((row) => toRecordKeyString(row.id)));
-@@ -1104,7 +1618,11 @@ function modernSurrealCollectionOptions(config) {
+@@ -1104,7 +1620,11 @@ function modernSurrealCollectionOptions(config) {
  			await ensureUpdateLive();
  		};
  		const unloadSubset = (subset) => {
@@ -1186,7 +1188,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  			const key = subsetCacheKey(subset);
  			activeSubsets.delete(key);
  			if (activeSubsets.size === 0) {
-@@ -1121,6 +1639,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1121,6 +1641,7 @@ function modernSurrealCollectionOptions(config) {
  		};
  		const cleanup = () => {
  			killed = true;
@@ -1194,7 +1196,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  			activeSubsets.clear();
  			cleanupBaseLive();
  			cleanupUpdateLive();
-@@ -1132,16 +1651,24 @@ function modernSurrealCollectionOptions(config) {
+@@ -1132,16 +1653,24 @@ function modernSurrealCollectionOptions(config) {
  			unloadSubset
  		};
  	};
@@ -1221,7 +1223,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  				if (!meta?.loadSubsetOptions) return [];
  				if (!crdtEnabled) {
  					const rows = await tableAccess.loadSubset(meta?.loadSubsetOptions);
-@@ -1160,10 +1687,10 @@ function modernSurrealCollectionOptions(config) {
+@@ -1160,10 +1689,10 @@ function modernSurrealCollectionOptions(config) {
  				const normalized = normalizeRow(mutation.modified);
  				if (!crdtEnabled) {
  					const idKey = toRecordKeyString(normalized.id);
@@ -1234,7 +1236,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  					const recordPayload = await encodeBaseRow(payload, idKey);
  					if (isTempId(normalized.id, tableName)) {
  						const created = await db.create(tableResource).content(recordPayload);
-@@ -1171,20 +1698,20 @@ function modernSurrealCollectionOptions(config) {
+@@ -1171,20 +1700,20 @@ function modernSurrealCollectionOptions(config) {
  						const createdId = createdRow && createdRow.id ? createdRow.id : normalized.id;
  						const resolved = {
  							...normalized,
@@ -1258,7 +1260,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "insert",
-@@ -1205,36 +1732,48 @@ function modernSurrealCollectionOptions(config) {
+@@ -1205,36 +1734,48 @@ function modernSurrealCollectionOptions(config) {
  			const writeUtils = getWriteUtils(params.collection.utils);
  			for (const mutation of params.transaction.mutations) {
  				if (mutation.type !== "update") continue;
@@ -1319,7 +1321,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "update",
-@@ -1255,18 +1794,20 @@ function modernSurrealCollectionOptions(config) {
+@@ -1255,18 +1796,20 @@ function modernSurrealCollectionOptions(config) {
  			const writeUtils = getWriteUtils(params.collection.utils);
  			for (const mutation of params.transaction.mutations) {
  				if (mutation.type !== "delete") continue;
@@ -1345,7 +1347,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  				};
  				applyCrdtLocalChange(doc, localChange);
  				const bytes = doc.export({
-@@ -1274,7 +1815,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1274,7 +1817,7 @@ function modernSurrealCollectionOptions(config) {
  					from: vv
  				});
  				await persistCrdtUpdate(id, bytes, localChange);
@@ -1354,7 +1356,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  			}
  		})
  	});
-@@ -1297,7 +1838,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1297,7 +1840,7 @@ function modernSurrealCollectionOptions(config) {
  					const updates = await queryRows(db, `SELECT * FROM type::table($table) ORDER BY ts ASC;`, { table: updatesTableName });
  					for (const update of updates) {
  						const id = idFromDocRef(update.doc);
@@ -1363,7 +1365,7 @@ index 29eeb4d556e3d5123318e48a62165eaf22b70d2d..8c92597e1871172b56c19f831b942e73
  						const bytes = await decodeUpdateBytes(update, "update");
  						if (!bytes.byteLength) continue;
  						doc.import(bytes);
-@@ -1341,15 +1882,35 @@ function modernSurrealCollectionOptions(config) {
+@@ -1341,15 +1884,35 @@ function modernSurrealCollectionOptions(config) {
  function surrealCollectionOptions(config) {
  	return modernSurrealCollectionOptions(config);
  }
@@ -1771,7 +1773,7 @@ index f239d858e8d8d88ac67aeb3681cf563940ac4124..59cbc6aa2099a89b572726f21160660b
 +export type { SurrealSchemaTable };
 \ No newline at end of file
 diff --git a/dist/index.mjs b/dist/index.mjs
-index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8e7bf41e1 100644
+index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..cd98c0cdaa8d0d354095636dffb18777d30438cd 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
 @@ -1,9 +1,8 @@
@@ -2212,7 +2214,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  };
  const rebindRecordIdIdentityDeep = (value, preferredByCanonical) => {
  	const canonical = asCanonicalRecordIdString(value);
-@@ -497,6 +780,267 @@ const applyPreferredRecordIdIdentityToCollection = (ctx, preferredByCanonical) =
+@@ -497,6 +780,269 @@ const applyPreferredRecordIdIdentityToCollection = (ctx, preferredByCanonical) =
  	const indexes = collectionWithInternals._indexes?.indexes;
  	if (entries && indexes) for (const index of indexes.values()) index.build?.(entries);
  };
@@ -2259,6 +2261,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
 +	};
 +	const released = /* @__PURE__ */ new WeakSet();
 +	let signedOut = false;
++	let currentAccess;
 +	const release = (lives) => {
 +		for (const live of lives) {
 +			released.add(live);
@@ -2427,7 +2430,8 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
 +			dropped = false;
 +			resync().catch(report);
 +		}), events.subscribe("auth", (tokens) => {
-+			const renewed = signedOut && Boolean(tokens);
++			const renewed = Boolean(tokens) && tokens.access !== currentAccess;
++			currentAccess = tokens?.access;
 +			signedOut = !tokens;
 +			if (renewed) resync().catch(report);
 +		}));
@@ -2480,7 +2484,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  // src/internal/subset-tracker.ts
  var ActiveSubsetTracker = class {
  	subsetIds = /* @__PURE__ */ new Map();
-@@ -507,10 +1051,24 @@ var ActiveSubsetTracker = class {
+@@ -507,10 +1053,24 @@ var ActiveSubsetTracker = class {
  	has(id) {
  		return this.activeIds.has(id);
  	}
@@ -2505,7 +2509,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  	delete(key) {
  		this.subsetIds.delete(key);
  		this.rebuildActiveIds();
-@@ -541,184 +1099,47 @@ const toTableResource = (table) => {
+@@ -541,184 +1101,47 @@ const toTableResource = (table) => {
  	return new Table(normalized.name);
  };
  const tableNameOf = (table) => toTableOptions(table).name;
@@ -2726,7 +2730,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  	};
  }
  // src/encryption/index.ts
-@@ -784,17 +1205,49 @@ var WebCryptoAESGCM = class WebCryptoAESGCM {
+@@ -784,17 +1207,49 @@ var WebCryptoAESGCM = class WebCryptoAESGCM {
  };
  // src/index.ts
  const NOOP = () => {};
@@ -2779,7 +2783,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  	const collectionId = config.id ?? deriveCollectionId(tableName, queryKey);
  	const tableResource = toTableResource(table);
  	const activeSubsets = new ActiveSubsetTracker();
-@@ -813,12 +1266,24 @@ function modernSurrealCollectionOptions(config) {
+@@ -813,12 +1268,24 @@ function modernSurrealCollectionOptions(config) {
  		if (!crdtApplyLocalChange) throw missingCrdtHandlers();
  		crdtApplyLocalChange(...args);
  	};
@@ -2806,7 +2810,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  		const normalized = normalizeRecordIdLikeValueDeep(row);
  		return {
  			...normalized,
-@@ -841,7 +1306,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -841,7 +1308,7 @@ function modernSurrealCollectionOptions(config) {
  		const merged = {
  			...stripEnvelopeFields(row),
  			...payload,
@@ -2815,7 +2819,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  		};
  		return normalizeRow(merged);
  	};
-@@ -860,9 +1325,12 @@ function modernSurrealCollectionOptions(config) {
+@@ -860,9 +1327,12 @@ function modernSurrealCollectionOptions(config) {
  	const updatesTableName = crdtEnabled ? tableNameOf(crdt.updatesTable) : void 0;
  	const updatesTable = crdtEnabled ? toTableResource(crdt.updatesTable) : void 0;
  	const snapshotsTableName = crdtEnabled && crdt.snapshotsTable ? tableNameOf(crdt.snapshotsTable) : void 0;
@@ -2829,7 +2833,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  		const doc = new LoroDoc();
  		docs.set(id, doc);
  		return doc;
-@@ -936,14 +1404,14 @@ function modernSurrealCollectionOptions(config) {
+@@ -936,14 +1406,14 @@ function modernSurrealCollectionOptions(config) {
  		const id = toRecordKeyString(materialized.id);
  		if (!e2eeEnabled) {
  			const { id: _ignoredId, ...rest } = materialized;
@@ -2848,7 +2852,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  	};
  	const hydratePlainRows = async (rows, write, begin, commit, type = "insert") => {
  		if (!rows.length) return;
-@@ -959,7 +1427,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -959,7 +1429,7 @@ function modernSurrealCollectionOptions(config) {
  	};
  	const hydrateCrdtDoc = async (id, write, begin, commit, writeType = "insert") => {
  		if (!crdtEnabled || !updatesTableName) return;
@@ -2857,7 +2861,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  		let since;
  		if (snapshotsTableName) {
  			const snapshot = (await queryRows(db, `SELECT * FROM type::table($table) WHERE doc = $doc ORDER BY ts DESC LIMIT 1;`, {
-@@ -1008,17 +1476,13 @@ function modernSurrealCollectionOptions(config) {
+@@ -1008,17 +1478,13 @@ function modernSurrealCollectionOptions(config) {
  			live.subscribe(async (message) => {
  				if (message.action === "KILLED") return;
  				const row = message.value;
@@ -2877,7 +2881,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  						});
  					} finally {
  						ctx.commit();
-@@ -1057,7 +1521,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1057,7 +1523,7 @@ function modernSurrealCollectionOptions(config) {
  				const id = idFromDocRef(value.doc);
  				if (value.actor && value.actor === resolveActor(id)) return;
  				if (isStrictOnDemand && !activeSubsets.has(id)) return;
@@ -2886,7 +2890,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  				const bytes = await decodeUpdateBytes(value, "update");
  				if (!bytes.byteLength) return;
  				doc.import(bytes);
-@@ -1077,9 +1541,59 @@ function modernSurrealCollectionOptions(config) {
+@@ -1077,9 +1543,59 @@ function modernSurrealCollectionOptions(config) {
  				cleanupUpdateLive = NOOP;
  			};
  		};
@@ -2948,7 +2952,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  			const key = subsetCacheKey(subset);
  			const rows = await tableAccess.loadSubset(subset);
  			const ids = new Set(rows.map((row) => toRecordKeyString(row.id)));
-@@ -1103,7 +1617,11 @@ function modernSurrealCollectionOptions(config) {
+@@ -1103,7 +1619,11 @@ function modernSurrealCollectionOptions(config) {
  			await ensureUpdateLive();
  		};
  		const unloadSubset = (subset) => {
@@ -2961,7 +2965,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  			const key = subsetCacheKey(subset);
  			activeSubsets.delete(key);
  			if (activeSubsets.size === 0) {
-@@ -1120,6 +1638,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1120,6 +1640,7 @@ function modernSurrealCollectionOptions(config) {
  		};
  		const cleanup = () => {
  			killed = true;
@@ -2969,7 +2973,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  			activeSubsets.clear();
  			cleanupBaseLive();
  			cleanupUpdateLive();
-@@ -1131,16 +1650,24 @@ function modernSurrealCollectionOptions(config) {
+@@ -1131,16 +1652,24 @@ function modernSurrealCollectionOptions(config) {
  			unloadSubset
  		};
  	};
@@ -2996,7 +3000,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  				if (!meta?.loadSubsetOptions) return [];
  				if (!crdtEnabled) {
  					const rows = await tableAccess.loadSubset(meta?.loadSubsetOptions);
-@@ -1159,10 +1686,10 @@ function modernSurrealCollectionOptions(config) {
+@@ -1159,10 +1688,10 @@ function modernSurrealCollectionOptions(config) {
  				const normalized = normalizeRow(mutation.modified);
  				if (!crdtEnabled) {
  					const idKey = toRecordKeyString(normalized.id);
@@ -3009,7 +3013,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  					const recordPayload = await encodeBaseRow(payload, idKey);
  					if (isTempId(normalized.id, tableName)) {
  						const created = await db.create(tableResource).content(recordPayload);
-@@ -1170,20 +1697,20 @@ function modernSurrealCollectionOptions(config) {
+@@ -1170,20 +1699,20 @@ function modernSurrealCollectionOptions(config) {
  						const createdId = createdRow && createdRow.id ? createdRow.id : normalized.id;
  						const resolved = {
  							...normalized,
@@ -3033,7 +3037,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "insert",
-@@ -1204,36 +1731,48 @@ function modernSurrealCollectionOptions(config) {
+@@ -1204,36 +1733,48 @@ function modernSurrealCollectionOptions(config) {
  			const writeUtils = getWriteUtils(params.collection.utils);
  			for (const mutation of params.transaction.mutations) {
  				if (mutation.type !== "update") continue;
@@ -3094,7 +3098,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  				const vv = doc.oplogVersion();
  				const localChange = {
  					type: "update",
-@@ -1254,18 +1793,20 @@ function modernSurrealCollectionOptions(config) {
+@@ -1254,18 +1795,20 @@ function modernSurrealCollectionOptions(config) {
  			const writeUtils = getWriteUtils(params.collection.utils);
  			for (const mutation of params.transaction.mutations) {
  				if (mutation.type !== "delete") continue;
@@ -3120,7 +3124,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  				};
  				applyCrdtLocalChange(doc, localChange);
  				const bytes = doc.export({
-@@ -1273,7 +1814,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1273,7 +1816,7 @@ function modernSurrealCollectionOptions(config) {
  					from: vv
  				});
  				await persistCrdtUpdate(id, bytes, localChange);
@@ -3129,7 +3133,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  			}
  		})
  	});
-@@ -1296,7 +1837,7 @@ function modernSurrealCollectionOptions(config) {
+@@ -1296,7 +1839,7 @@ function modernSurrealCollectionOptions(config) {
  					const updates = await queryRows(db, `SELECT * FROM type::table($table) ORDER BY ts ASC;`, { table: updatesTableName });
  					for (const update of updates) {
  						const id = idFromDocRef(update.doc);
@@ -3138,7 +3142,7 @@ index 1bc88c277e8b9aa968ef37c9687175a94d26ee19..b333b5821cd536f44dd64f914efe55e8
  						const bytes = await decodeUpdateBytes(update, "update");
  						if (!bytes.byteLength) continue;
  						doc.import(bytes);
-@@ -1340,15 +1881,35 @@ function modernSurrealCollectionOptions(config) {
+@@ -1340,15 +1883,35 @@ function modernSurrealCollectionOptions(config) {
  function surrealCollectionOptions(config) {
  	return modernSurrealCollectionOptions(config);
  }

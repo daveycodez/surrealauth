@@ -24,7 +24,9 @@ function SignUp() {
       await surreal.register(String(form.get("email")), String(form.get("password")))
       await navigate({ to: "/" })
     } catch (error) {
-      setError(errorMessage(error))
+      setError(
+        errorMessage(error, "Couldn't create that account. The email may already be in use.")
+      )
       setPending(false)
     }
   }

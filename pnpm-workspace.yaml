@@ -19,5 +19,6 @@ allowBuilds:
 #   - https://github.com/surrealdb/tanstack-db/pull/15 forwards persisted options like initialRender
 #   - https://github.com/surrealdb/tanstack-db/pull/16 never mutates the loadSubset request
 #   - https://github.com/surrealdb/tanstack-db/pull/17 handles rows already deleted on the server
+#   - https://github.com/surrealdb/tanstack-db/pull/18 reopens LIVE queries when the access token changes
 patchedDependencies:
   "@surrealdb/tanstack-db": patches/@surrealdb__tanstack-db.patch
