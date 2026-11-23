@@ -14,9 +14,10 @@ allowBuilds:
 # Upstream fixes applied as a patch; remove it once they are released:
 # - @surrealdb/tanstack-db:
 #   - https://github.com/surrealdb/tanstack-db/pull/12 live on-demand subsets, removes deleted cached rows
+#   - https://github.com/surrealdb/tanstack-db/pull/13 lazy-loads loro-crdt (crashes Worker prerendering)
 #   - https://github.com/surrealdb/tanstack-db/pull/14 string record ids (recordIds: "string")
-#   - https://github.com/surrealdb/tanstack-db/pull/13 lazy-loads loro-crdt (CRDT-only, unused here;
-#     its top-level import crashes prerendering in the Worker)
-#   - https://github.com/surrealdb/tanstack-db/pull/17 tolerates a LIVE delete arriving first
+#   - https://github.com/surrealdb/tanstack-db/pull/15 forwards persisted options like initialRender
+#   - https://github.com/surrealdb/tanstack-db/pull/16 never mutates the loadSubset request
+#   - https://github.com/surrealdb/tanstack-db/pull/17 handles rows already deleted on the server
 patchedDependencies:
   "@surrealdb/tanstack-db": patches/@surrealdb__tanstack-db.patch

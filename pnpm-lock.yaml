@@ -205,7 +205,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@surrealdb/tanstack-db': 31c1c7a60ea20ec98a271683292b847d093a21a6a8b03dff20d3ca0892dffeb8
+  '@surrealdb/tanstack-db': b8f91a9873bedfb2ce403644b85fee584d2854aa8f322866a7738f42f467e879
 
 importers:
 
@@ -270,7 +270,7 @@ importers:
         version: link:../../packages/react
       '@surrealdb/tanstack-db':
         specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(patch_hash=31c1c7a60ea20ec98a271683292b847d093a21a6a8b03dff20d3ca0892dffeb8)(@standard-schema/spec@1.1.0)(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@tanstack/query-db-collection@1.5.2(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@typescript/typescript6@6.0.2))(@typescript/typescript6@6.0.2)(surrealdb@2.2.2(@typescript/typescript6@6.0.2)(tslib@2.9.1))
+        version: 1.0.0-alpha.1(patch_hash=b8f91a9873bedfb2ce403644b85fee584d2854aa8f322866a7738f42f467e879)(@standard-schema/spec@1.1.0)(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@tanstack/query-db-collection@1.5.2(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@typescript/typescript6@6.0.2))(@typescript/typescript6@6.0.2)(surrealdb@2.2.2(@typescript/typescript6@6.0.2)(tslib@2.9.1))
       '@tanstack/browser-db-sqlite-persistence':
         specifier: 1.0.0-rc.1.5
         version: 1.0.0-rc.1.5(@journeyapps/wa-sqlite@1.7.2)(@typescript/typescript6@6.0.2)
@@ -6375,7 +6375,7 @@ snapshots:
       typescript: '@typescript/typescript6@6.0.2'
       uuidv7: 1.2.1
 
-  '@surrealdb/tanstack-db@1.0.0-alpha.1(patch_hash=31c1c7a60ea20ec98a271683292b847d093a21a6a8b03dff20d3ca0892dffeb8)(@standard-schema/spec@1.1.0)(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@tanstack/query-db-collection@1.5.2(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@typescript/typescript6@6.0.2))(@typescript/typescript6@6.0.2)(surrealdb@2.2.2(@typescript/typescript6@6.0.2)(tslib@2.9.1))':
+  '@surrealdb/tanstack-db@1.0.0-alpha.1(patch_hash=b8f91a9873bedfb2ce403644b85fee584d2854aa8f322866a7738f42f467e879)(@standard-schema/spec@1.1.0)(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@tanstack/query-db-collection@1.5.2(@tanstack/db@1.0.0-rc.1.5(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.108.2)(@typescript/typescript6@6.0.2))(@typescript/typescript6@6.0.2)(surrealdb@2.2.2(@typescript/typescript6@6.0.2)(tslib@2.9.1))':
     dependencies:
       '@standard-schema/spec': 1.1.0
       '@tanstack/db': 1.0.0-rc.1.5(@typescript/typescript6@6.0.2)
