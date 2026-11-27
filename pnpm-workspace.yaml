@@ -21,5 +21,12 @@ allowBuilds:
 #   - https://github.com/surrealdb/tanstack-db/pull/17 handles rows already deleted on the server
 #   - https://github.com/surrealdb/tanstack-db/pull/18 reopens LIVE queries when the access token changes
 #   - https://github.com/surrealdb/tanstack-db/pull/19 retries subset loads after a lost connection
+minimumReleaseAgeExclude:
+  - "@tanstack/browser-db-sqlite-persistence@1.0.0-rc.1.6"
+  - "@tanstack/db-ivm@1.0.0-rc.1.4"
+  - "@tanstack/db-sqlite-persistence-core@1.0.0-rc.1.6"
+  - "@tanstack/db@1.0.0-rc.1.6"
+  - "@tanstack/react-db@1.0.0-rc.1.6"
+
 patchedDependencies:
   "@surrealdb/tanstack-db": patches/@surrealdb__tanstack-db.patch
